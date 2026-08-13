@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chấm Công</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 450px;
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        .date-time {
+            color: #666;
+            font-size: 18px;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+        }
+        select {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: border-color 0.3s;
+        }
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .btn {
+            width: 100%;
+            padding: 18px;
+            border: none;
+            border-radius: 10px;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-top: 10px;
+        }
+        .btn-checkin {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .btn-checkin:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        }
+        .btn-checkout {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+        .btn-checkout:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(245, 87, 108, 0.4);
+        }
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .btn-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .status {
+            margin-top: 25px;
+            padding: 20px;
+            border-radius: 10px;
+            background: #f8f9fa;
+        }
+        .status-title {
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 10px;
+        }
+        .status-value {
+            font-size: 20px;
+            font-weight: bold;
+            color: #333;
+        }
+        .status-success { color: #28a745; }
+        .status-warning { color: #ffc107; }
+        .status-info { color: #17a2b8; }
+        .status-late { color: #dc3545; font-weight: bold; }
+
+        .error {
+            color: #856404;
+            margin-top: 15px;
+            padding: 12px;
+            background: #fff3cd;
+            border: 1px solid #ffeeba;
+            border-radius: 8px;
+            display: none;
+            font-size: 14px;
+        }
+        .admin-link {
+            margin-top: 30px;
+            font-size: 14px;
+        }
+        .admin-link a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        .admin-link a:hover {
+            text-decoration: underline;
+        }
+        .loading {
+            display: none;
+            margin-top: 15px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>HE THONG CHAM CONG</h1>
+        <div class="date-time" id="dateTime"></div>
+
+        <div class="form-group">
+            <label>Chon nhan vien:</label>
+            <select id="employeeSelect">
+                <option value="">-- Chon ten --</option>
+            </select>
+        </div>
+
+        <div class="btn-row">
+            <button class="btn btn-checkin" id="btnCheckin" onclick="handleCheckin()" disabled>
+                CHECKIN
+            </button>
+            <button class="btn btn-checkout" id="btnCheckout" onclick="handleCheckout()" disabled>
+                CHECKOUT
+            </button>
+        </div>
+
+        <div class="loading" id="loading">Dang xu ly...</div>
+        <div class="error" id="error"></div>
+
+        <div class="status" id="statusBox" style="display:none;">
+            <div class="status-title">TRANG THAI HOM NAY</div>
+            <div class="status-value" id="statusValue"></div>
+        </div>
+
+        <div class="admin-link">
+            <a href="/admin">Quan ly / Admin</a>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+        let deviceId = localStorage.getItem('deviceId');
+        let employees = [];
+        let currentStatus = null;
+        let banMinutes = 30;
+
+        // Generate device ID if not exists
+        if (!deviceId) {
+            deviceId = 'device_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            localStorage.setItem('deviceId', deviceId);
+        }
+
+        // Update date/time
+        function updateDateTime() {
+            const now = new Date();
+            const options = {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            };
+            document.getElementById('dateTime').textContent = now.toLocaleDateString('vi-VN', options);
+        }
+        updateDateTime();
+        setInterval(updateDateTime, 1000);
+
+        // Load employees
+        async function loadEmployees() {
+            try {
+                const res = await fetch(`${API_BASE}/employees`);
+                employees = await res.json();
+                const select = document.getElementById('employeeSelect');
+                select.innerHTML = '<option value="">-- Chon ten --</option>';
+                employees.forEach(emp => {
+                    select.innerHTML += `<option value="${emp.id}">${emp.code} - ${emp.name}</option>`;
+                });
+            } catch (err) {
+                showError('Khong the tai danh sach nhan vien');
+            }
+        }
+
+        // Load ban duration setting
+        async function loadBanSetting() {
+            try {
+                const res = await fetch(`${API_BASE}/settings/ban-duration`);
+                if (res.ok) {
+                    const data = await res.json();
+                    banMinutes = parseInt(data.value) || 30;
+                }
+            } catch (err) {
+                console.log('Khong the tai cau hinh ban duration');
+            }
+        }
+
+        // Refresh both ban states every 30 seconds.
+        async function refreshBanStates() {
+            try {
+                const [ci, co] = await Promise.all([
+                    fetch(`${API_BASE}/attendance/ban-status/${deviceId}?action_type=checkin`).then(r => r.json()),
+                    fetch(`${API_BASE}/attendance/ban-status/${deviceId}?action_type=checkout`).then(r => r.json()),
+                ]);
+                updateButtons(ci, co);
+            } catch (err) {
+                console.log('Khong the tai trang thai ban');
+            }
+        }
+
+        function updateButtons(checkinBan, checkoutBan) {
+            const btnCi = document.getElementById('btnCheckin');
+            const btnCo = document.getElementById('btnCheckout');
+            const empSel = document.getElementById('employeeSelect');
+
+            const hasEmployee = !!empSel.value;
+            const alreadyCheckedIn = currentStatus && currentStatus.has_checked_in;
+            const alreadyCheckedOut = currentStatus && currentStatus.has_checked_out;
+
+            // Checkin button: requires employee + not banned + not already checked in today
+            const ciBanned = checkinBan && checkinBan.is_banned;
+            btnCi.disabled = !hasEmployee || ciBanned || !!alreadyCheckedIn;
+            if (ciBanned) {
+                btnCi.textContent = `CHO ${checkinBan.remaining_minutes}p`;
+            } else if (alreadyCheckedIn) {
+                btnCi.textContent = 'DA CHECKIN';
+            } else {
+                btnCi.textContent = 'CHECKIN';
+            }
+
+            // Checkout button: requires employee + not banned + must have already checked in + not yet checked out
+            const coBanned = checkoutBan && checkoutBan.is_banned;
+            btnCo.disabled = !hasEmployee || coBanned || !alreadyCheckedIn || !!alreadyCheckedOut;
+            if (coBanned) {
+                btnCo.textContent = `CHO ${checkoutBan.remaining_minutes}p`;
+            } else if (!alreadyCheckedIn) {
+                btnCo.textContent = 'CHECKOUT';
+                btnCo.disabled = !hasEmployee || coBanned;
+            } else if (alreadyCheckedOut) {
+                btnCo.textContent = 'DA CHECKOUT';
+            } else {
+                btnCo.textContent = 'CHECKOUT';
+            }
+        }
+
+        // Check today's status (only meaningful for the device that performed checkin).
+        async function checkStatus() {
+            try {
+                const res = await fetch(`${API_BASE}/attendance/today/${deviceId}`);
+                if (res.ok) {
+                    currentStatus = await res.json();
+                } else {
+                    currentStatus = null;
+                }
+            } catch (err) {
+                currentStatus = null;
+            }
+            renderStatusBox();
+        }
+
+        function renderStatusBox() {
+            const statusBox = document.getElementById('statusBox');
+            const statusValue = document.getElementById('statusValue');
+
+            if (currentStatus && currentStatus.has_checked_in) {
+                statusBox.style.display = 'block';
+                const ciTxt = `Checkin luc ${formatTime(currentStatus.checkin_time)}`;
+                const coTxt = currentStatus.has_checked_out
+                    ? `<br>Checkout luc ${formatTime(currentStatus.checkout_time)}`
+                    : '<br><small style="color:#666;">Chua checkout</small>';
+                const lateTxt = (currentStatus.late_minutes && currentStatus.late_minutes > 0)
+                    ? `<br><span class="status-late">Ban da checkin muon ${currentStatus.late_minutes} phut</span>`
+                    : '';
+                statusValue.innerHTML = `
+                    <span class="status-success">${ciTxt}</span>${lateTxt}${coTxt}
+                    <br><small>${currentStatus.employee_name || ''}</small>
+                `;
+            } else {
+                statusBox.style.display = 'none';
+            }
+        }
+
+        function formatTime(datetime) {
+            if (!datetime) return '';
+            const d = new Date(datetime);
+            return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function showError(msg) {
+            const error = document.getElementById('error');
+            error.textContent = msg;
+            error.style.display = 'block';
+            setTimeout(() => { error.style.display = 'none'; }, 6000);
+        }
+
+        async function postAction(endpoint, body) {
+            const res = await fetch(`${API_BASE}${endpoint}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data.detail || `Loi ${endpoint}`);
+            }
+            return res.json();
+        }
+
+        async function handleCheckin() {
+            const employeeId = document.getElementById('employeeSelect').value;
+            if (!employeeId) { showError('Vui long chon nhan vien'); return; }
+
+            const btnCi = document.getElementById('btnCheckin');
+            const btnCo = document.getElementById('btnCheckout');
+            btnCi.disabled = true;
+            btnCo.disabled = true;
+            document.getElementById('loading').style.display = 'block';
+
+            try {
+                await postAction('/attendance/checkin', {
+                    employee_id: parseInt(employeeId),
+                    device_id: deviceId,
+                });
+                await Promise.all([checkStatus(), refreshBanStates()]);
+            } catch (err) {
+                showError(err.message);
+                await refreshBanStates();
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        async function handleCheckout() {
+            const employeeId = document.getElementById('employeeSelect').value;
+            if (!employeeId) { showError('Vui long chon nhan vien'); return; }
+
+            const btnCi = document.getElementById('btnCheckin');
+            const btnCo = document.getElementById('btnCheckout');
+            btnCi.disabled = true;
+            btnCo.disabled = true;
+            document.getElementById('loading').style.display = 'block';
+
+            try {
+                await postAction('/attendance/checkout', {
+                    employee_id: parseInt(employeeId),
+                    device_id: deviceId,
+                });
+                await Promise.all([checkStatus(), refreshBanStates()]);
+            } catch (err) {
+                showError(err.message);
+                await refreshBanStates();
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        // Re-evaluate buttons whenever the dropdown changes.
+        document.getElementById('employeeSelect').addEventListener('change', refreshBanStates);
+
+        // Periodic refresh so the ban countdown eventually clears the buttons.
+        setInterval(refreshBanStates, 30000);
+
+        // Initial load
+        (async () => {
+            await loadBanSetting();
+            await loadEmployees();
+            await checkStatus();
+            await refreshBanStates();
+        })();
+    </script>
+</body>
+</html>

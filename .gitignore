@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Distribution / packaging
+build/
+dist/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+data/app.log
+
+# Runtime data (SQLite DB, WAL files, operator-only)
+data/checknv.db
+data/checknv.db-journal
+data/checknv.db-wal
+data/checknv.db-shm
+backups/
+
+# Secrets / env overrides (the .env.example file IS tracked)
+.env
+.env.*
+!.env.example
+
+# Excel templates (operator-supplied via Docker volume or env var)
+resorce/*.xlsx
+resorce/*.xls
+!resorce/README.md
+
+# Backups / scratch
+*.bak
+*.tmp
+*.orig
+
+# Operational runbook (kept out of git to keep repo lean for new operators;
+# re-add if you want to publish it on GitHub.)
+HUONG-DAN-VAN-HANH.md

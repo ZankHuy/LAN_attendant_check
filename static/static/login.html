@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dang Nhap Admin</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 24px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+        }
+        input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .btn {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        }
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .error {
+            color: #dc3545;
+            margin-top: 15px;
+            padding: 10px;
+            background: #ffe6e6;
+            border-radius: 8px;
+            display: none;
+        }
+        .back-link {
+            margin-top: 20px;
+        }
+        .back-link a {
+            color: #667eea;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .back-link a:hover {
+            text-decoration: underline;
+        }
+        .change-password-section {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+            display: none;
+        }
+        .change-password-section h2 {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .success {
+            color: #28a745;
+            margin-top: 15px;
+            padding: 10px;
+            background: #e6ffe6;
+            border-radius: 8px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DANG NHAP QUAN TRI</h1>
+        
+        <form id="loginForm">
+            <div class="form-group">
+                <label>Mat khau:</label>
+                <input type="password" id="password" placeholder="Nhap mat khau" required>
+            </div>
+            <button type="submit" class="btn" id="btnLogin">Dang Nhap</button>
+        </form>
+        
+        <div class="error" id="error"></div>
+        
+        <div class="change-password-section" id="changePasswordSection">
+            <h2>Doi mat khau</h2>
+            <form id="changePasswordForm">
+                <div class="form-group">
+                    <label>Mat khau cu:</label>
+                    <input type="password" id="oldPassword" required>
+                </div>
+                <div class="form-group">
+                    <label>Mat khau moi:</label>
+                    <input type="password" id="newPassword" required>
+                </div>
+                <div class="form-group">
+                    <label>Nhap lai mat khau moi:</label>
+                    <input type="password" id="confirmPassword" required>
+                </div>
+                <button type="submit" class="btn">Doi mat khau</button>
+            </form>
+            <div class="success" id="success"></div>
+        </div>
+        
+        <div class="back-link">
+            <a href="/">Quay lai trang cham cong</a>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api/auth';
+
+        // Browser auto-attaches the HttpOnly session cookie if present; we
+        // probe /verify to decide whether to show the change-password panel.
+        (async function bootstrap() {
+            try {
+                const res = await fetch(`${API_BASE}/verify`, {
+                    credentials: 'include',
+                });
+                if (res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    if (data.authenticated) showChangePassword();
+                }
+            } catch (err) { /* not logged in — fall through to login form */ }
+        })();
+
+        function showChangePassword() {
+            document.getElementById('loginForm').style.display = 'none';
+            document.getElementById('changePasswordSection').style.display = 'block';
+        }
+
+        // Login form
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const password = document.getElementById('password').value;
+            const btn = document.getElementById('btnLogin');
+            const error = document.getElementById('error');
+
+            btn.disabled = true;
+            error.style.display = 'none';
+
+            try {
+                const res = await fetch(`${API_BASE}/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Basic ' + btoa('admin:' + password)
+                    },
+                    credentials: 'include',
+                });
+
+                if (res.ok) {
+                    document.getElementById('password').value = '';
+                    showChangePassword();
+                } else {
+                    error.textContent = 'Sai mật khẩu';
+                    error.style.display = 'block';
+                }
+            } catch (err) {
+                error.textContent = 'Lỗi kết nối';
+                error.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        // Change password form
+        document.getElementById('changePasswordForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const oldPassword = document.getElementById('oldPassword').value;
+            const newPassword = document.getElementById('newPassword').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+            const error = document.getElementById('error');
+            const success = document.getElementById('success');
+
+            error.style.display = 'none';
+            success.style.display = 'none';
+
+            if (newPassword !== confirmPassword) {
+                error.textContent = 'Mật khẩu mới không khớp';
+                error.style.display = 'block';
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/change-password`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        old_password: oldPassword,
+                        new_password: newPassword,
+                        confirm_password: confirmPassword
+                    })
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    success.textContent = 'Đổi mật khẩu thành công!';
+                    success.style.display = 'block';
+                    document.getElementById('changePasswordForm').reset();
+                    setTimeout(() => window.location.href = '/admin', 1500);
+                } else {
+                    error.textContent = data.detail || 'Lỗi đổi mật khẩu';
+                    error.style.display = 'block';
+                }
+            } catch (err) {
+                error.textContent = 'Lỗi kết nối';
+                error.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>

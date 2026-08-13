@@ -1,0 +1,24 @@
+__pycache__
+__pycache__/
+*.pyc
+*.pyo
+.git
+.gitignore
+data
+docker-compose.yml
+Dockerfile
+README.md
+*.xlsx~$*
+.venv
+# Don't bake .env (might contain HIDDEN_PASSWORD) into the image.
+.env
+.env.*
+!.env.example
+# Block Excel files under resorce/ at build time. Operators must mount
+# their template via ./resorce:/app/resorce (Docker volume) or set
+# EXPORT_TEMPLATE_FILE to a server-side path. This prevents any accidental
+# committed template from leaking into the image.
+*.xlsx
+*.xls
+# HUONG-DAN-VAN-HANH.md is large and only relevant to operators, not the runtime.
+HUONG-DAN-VAN-HANH.md

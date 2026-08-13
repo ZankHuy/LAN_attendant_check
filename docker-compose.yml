@@ -1,0 +1,66 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist SQLite database (not part of image)
+      - ./data:/app/data
+      # Operator-supplied Excel template(s) — see resorce/README.md.
+      # Mounting a host folder means you can drop a new template.xlsx in
+      # without rebuilding the image. If the folder is empty the export
+      # endpoint returns 503 with guidance.
+      - ./resorce:/app/resorce
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Ho_Chi_Minh
+      # Override the Excel export template filename (must live under ./resorce/).
+      # Default: template.xlsx
+      # - EXPORT_TEMPLATE_FILE=your_template.xlsx
+      # Hidden management page — set both to enable.
+      # URL the operator visits (default /hidden).
+      # - HIDDEN_URL_PATH=hidden
+      # Password required to access the page (no value = /api/hidden/* returns 404).
+      # - HIDDEN_PASSWORD=changeme
+
+    healthcheck:
+      # Uses the /health endpoint added in main.py. Container is "healthy"
+      # when it can answer and reach the DB. Uses python's urllib so we
+      # don't have to install wget/curl in the slim image.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    # ── Auto-rebuild + restart on code change ───────────────────────────────
+    # `develop` triggers `docker compose watch`. When you save a file under
+    # app/, static/, requirements.txt, Dockerfile, or docker-compose.yml,
+    # Compose rebuilds the image and recreates the container automatically.
+    # Note: the resorce/ folder is mounted as a volume, so dropping a
+    # template.xlsx there only needs `docker compose restart`, not a rebuild.
+    develop:
+      watch:
+        - path: ./app
+          action: rebuild
+        - path: ./static
+          action: rebuild
+        - path: ./requirements.txt
+          action: rebuild
+        - path: ./Dockerfile
+          action: rebuild
+        - path: ./docker-compose.yml
+          action: rebuild
+
+  # ── Daily backup sidecar ──────────────────────────────────────────────────
+  # Snapshots data/checknv.db into ./backups/ once a day and keeps the last
+  # 30 days. Opt in with: docker compose --profile backup up -d
+  backup:
+    image: alpine:3.19
+    profiles: ["backup"]
+    volumes:
+      - ./data:/data:ro
+      - ./backups:/backups
+      - ./scripts:/scripts:ro
+    entrypoint: ["/bin/sh", "/scripts/backup.sh"]
+    restart: unless-stopped

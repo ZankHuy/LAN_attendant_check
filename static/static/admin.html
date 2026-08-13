@@ -1,0 +1,1047 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quản Lý Chấm Công</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 22px; }
+        .header-right { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        .btn {
+            padding: 8px 14px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.85; }
+        .btn-primary { background: #667eea; color: white; }
+        .btn-secondary { background: rgba(255,255,255,0.25); color: white; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-edit { background: #ffc107; color: #333; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .container { padding: 20px; max-width: 1800px; margin: 0 auto; }
+
+        /* Toolbar */
+        .toolbar {
+            background: white;
+            padding: 14px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 14px;
+        }
+        .toolbar-left { display: flex; gap: 12px; align-items: center; }
+        select, input {
+            padding: 7px 11px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .legend { display: flex; gap: 14px; font-size: 12px; flex-wrap: wrap; }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .legend-color { width: 20px; height: 15px; border-radius: 3px; }
+
+        /* Forms (collapsible panels) */
+        .panel {
+            background: white;
+            padding: 18px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .panel.show { display: block; }
+        .panel h3 { margin-bottom: 12px; color: #333; }
+        .panel .row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+        .panel input, .panel select { min-width: 130px; }
+
+        /* Sheet */
+        .sheet-container {
+            background: white;
+            border-radius: 8px;
+            overflow-x: auto;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        table { width: 100%; border-collapse: collapse; min-width: 1500px; }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 6px;
+            text-align: center;
+            font-size: 13px;
+            white-space: nowrap;
+        }
+        th { background: #f8f9fa; font-weight: 600; position: sticky; top: 0; z-index: 10; }
+
+        /* Sticky columns */
+        .col-stt, .th-stt { left: 0; min-width: 50px; }
+        .col-code, .th-code { left: 50px; min-width: 100px; }
+        .col-name, .th-name { left: 150px; min-width: 180px; }
+        .col-stt, .col-code, .col-name {
+            background: #e9ecef;
+            font-weight: 600;
+            position: sticky;
+            z-index: 5;
+            text-align: left;
+        }
+        .th-stt, .th-code, .th-name {
+            position: sticky;
+            z-index: 15;
+            background: #dee2e6;
+        }
+
+        /* Date header: 2 lines (date + weekday) */
+        .date-header { min-width: 56px; font-size: 11px; padding: 4px 2px; }
+        .date-header .day-num { font-weight: bold; }
+        .date-header .day-name { color: #666; font-size: 10px; }
+
+        /* Week separator columns (Sunday) */
+        .weekend { background: #f0f0f0; color: #999; }
+        .weekend-sun { background: #e0e0e0; color: #888; }
+        .saturday { background: #f8f9fa; }
+
+        /* Cell status colors */
+        .cell-on { background: #d4edda; color: #155724; font-weight: 500; }
+        .cell-late { background: #fff3cd; color: #856404; font-weight: 500; }
+        .cell-half { background: #ffe69c; color: #856404; font-weight: 500; }
+        .cell-absent { background: #f8d7da; color: #721c24; }
+        .cell-empty { color: #ccc; }
+        .cell-content { font-size: 12px; }
+
+        /* Department header row */
+        .dept-row td {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-weight: 600;
+            text-align: left;
+            padding: 8px 12px;
+            font-size: 14px;
+        }
+
+        /* Summary columns */
+        .summary-cell { background: #f8f9fa; font-weight: 600; }
+
+        /* Login */
+        .login-required { display: flex; justify-content: center; align-items: center; height: 80vh; }
+        .login-box {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        .login-box h2 { margin-bottom: 20px; color: #333; }
+        .login-box input { width: 100%; padding: 15px; margin-bottom: 15px; border: 2px solid #ddd; border-radius: 8px; font-size: 16px; }
+        .login-box .btn { width: 100%; padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-size: 16px; }
+        .login-error { color: #dc3545; margin-top: 10px; display: none; }
+
+        /* Stats */
+        .totals {
+            background: transparent;
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .stat-card h3 { color: #666; font-size: 14px; margin-bottom: 10px; }
+        .stat-card .value { font-size: 30px; font-weight: bold; color: #333; }
+        .stat-card .value.on-time { color: #28a745; }
+        .stat-card .value.late { color: #856404; }
+        .stat-card .value.absent { color: #dc3545; }
+
+        /* Employee list */
+        .employee-table { width: 100%; min-width: 600px; }
+        .action-cell { display: flex; gap: 6px; justify-content: center; }
+
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 18px;
+            border-radius: 8px;
+            background: #333;
+            color: white;
+            z-index: 1000;
+            display: none;
+            font-size: 14px;
+        }
+        .toast.success { background: #28a745; }
+        .toast.error { background: #dc3545; }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.45);
+            display: none; align-items: center; justify-content: center;
+            z-index: 999;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal {
+            background: white;
+            padding: 24px;
+            border-radius: 10px;
+            width: 90%; max-width: 480px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .modal h3 { margin-bottom: 18px; color: #333; }
+        .modal .form-row { margin-bottom: 14px; }
+        .modal label { display: block; font-size: 13px; color: #555; margin-bottom: 4px; font-weight: 500; }
+        .modal input, .modal select {
+            width: 100%; padding: 9px 11px;
+            border: 1px solid #ddd; border-radius: 6px; font-size: 14px;
+        }
+        .modal input[readonly] { background: #f5f5f5; color: #777; }
+        .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- Login -->
+        <div id="loginPage" class="login-required" style="display:none;">
+            <div class="login-box">
+                <h2>Đăng Nhập Quản Trị</h2>
+                <input type="password" id="password" placeholder="Nhập mật khẩu">
+                <button class="btn" onclick="login()">Đăng Nhập</button>
+                <div class="login-error" id="loginError">Sai mật khẩu</div>
+            </div>
+        </div>
+
+        <!-- Main -->
+        <div id="mainApp" style="display:none;">
+            <div class="header">
+                <h1>Bảng Chấm Công</h1>
+                <div class="header-right">
+                    <button class="btn btn-secondary" onclick="togglePanel('employeesPanel')">👥 Quản lý NV</button>
+                    <button class="btn btn-secondary" onclick="togglePanel('departmentsPanel')">🏢 Phòng ban</button>
+                    <button class="btn btn-secondary" onclick="togglePanel('settingsPanel')">⚙ Cấu hình</button>
+                    <button class="btn btn-secondary" onclick="window.location.href='/'">Trang Chấm Công</button>
+                    <button class="btn btn-danger" onclick="logout()">Đăng Xuất</button>
+                </div>
+            </div>
+
+            <div class="container">
+                <!-- Employees Panel -->
+                <div class="panel" id="employeesPanel">
+                    <h3>Quản lý nhân viên</h3>
+                    <div class="row">
+                        <input type="text" id="newCode" placeholder="Mã NV" style="width:140px;">
+                        <input type="text" id="newName" placeholder="Họ tên" style="width:220px;">
+                        <select id="newDepartment" style="width:200px;"><option value="">-- Phòng ban --</option></select>
+                        <input type="date" id="newStartDate" title="Ngày bắt đầu">
+                        <select id="newStatus" style="width:140px;">
+                            <option value="">-- Tình trạng --</option>
+                            <option value="Chính thức">Chính thức</option>
+                            <option value="Thử việc">Thử việc</option>
+                            <option value="Học việc">Học việc</option>
+                            <option value="TTS">TTS</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="addEmployee()">+ Thêm</button>
+                    </div>
+                    <table class="employee-table" id="employeeTable">
+                        <thead>
+                            <tr>
+                                <th>STT</th>
+                                <th>Mã NV</th>
+                                <th>Họ tên</th>
+                                <th>Phòng ban</th>
+                                <th>Ngày vào</th>
+                                <th>Tình trạng</th>
+                                <th>Thao tác</th>
+                            </tr>
+                        </thead>
+                        <tbody id="employeeTableBody"></tbody>
+                    </table>
+                </div>
+
+                <!-- Departments Panel -->
+                <div class="panel" id="departmentsPanel">
+                    <h3>Quản lý phòng ban</h3>
+                    <div class="row">
+                        <input type="text" id="newDeptName" placeholder="Tên phòng ban" style="width:240px;">
+                        <input type="number" id="newDeptOrder" placeholder="Thứ tự" value="99" style="width:100px;">
+                        <button class="btn btn-primary" onclick="addDepartment()">+ Thêm</button>
+                    </div>
+                    <table class="employee-table" id="deptTable">
+                        <thead><tr><th>STT</th><th>Tên phòng ban</th><th>Thứ tự</th><th>Thao tác</th></tr></thead>
+                        <tbody id="deptTableBody"></tbody>
+                    </table>
+                </div>
+
+                <!-- Settings Panel -->
+                <div class="panel" id="settingsPanel">
+                    <h3>Cấu hình hệ thống</h3>
+                    <div class="row">
+                        <label style="min-width:200px;">Thời gian cấm thiết bị (phút):</label>
+                        <input type="number" id="banMinutes" min="1" max="1440" style="width:120px;">
+                        <button class="btn btn-primary" onclick="saveBanDuration()">Lưu</button>
+                    </div>
+                    <small style="color:#666;">
+                        Sau khi checkin/checkout, thiết bị sẽ bị khóa trong khoảng thời gian này
+                        để không ai khác có thể sử dụng nó để chấm công.
+                    </small>
+                </div>
+
+                <!-- Toolbar -->
+                <div class="toolbar">
+                    <div class="toolbar-left">
+                        <label>Kỳ:</label>
+                        <select id="monthSelect" onchange="loadData()"></select>
+                        <select id="yearSelect" onchange="loadData()"></select>
+                        <button class="btn btn-success" onclick="exportExcel()" style="background:#28a745;color:white;">⬇ Xuất Excel</button>
+                        <span id="cacheStatus" style="font-size:11px;color:#999;"></span>
+                    </div>
+                    <div class="legend">
+                        <div class="legend-item"><div class="legend-color" style="background:#d4edda;"></div><span>Đúng giờ (1)</span></div>
+                        <div class="legend-item"><div class="legend-color" style="background:#fff3cd;"></div><span>Muộn (1)</span></div>
+                        <div class="legend-item"><div class="legend-color" style="background:#ffe69c;"></div><span>Nửa ngày (0.5)</span></div>
+                        <div class="legend-item"><div class="legend-color" style="background:#f8d7da;"></div><span>Nghỉ (0)</span></div>
+                        <div class="legend-item"><div class="legend-color" style="background:#e0e0e0;"></div><span>Chủ nhật</span></div>
+                    </div>
+                </div>
+
+                <!-- Sheet -->
+                <div class="sheet-container">
+                    <table id="sheetTable">
+                        <thead id="sheetHead"></thead>
+                        <tbody id="sheetBody"></tbody>
+                    </table>
+                </div>
+
+                <!-- Totals -->
+                <div class="totals" id="totals"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <!-- Edit Employee Modal -->
+    <div class="modal-overlay" id="editModal" onclick="if(event.target===this)closeEditModal()">
+        <div class="modal">
+            <h3>✏ Sửa thông tin nhân viên</h3>
+            <input type="hidden" id="editEmpId">
+            <div class="form-row">
+                <label>Mã NV</label>
+                <input type="text" id="editCode" readonly>
+            </div>
+            <div class="form-row">
+                <label>Họ tên *</label>
+                <input type="text" id="editName" placeholder="Họ và tên">
+            </div>
+            <div class="form-row">
+                <label>Phòng ban</label>
+                <select id="editDepartment">
+                    <option value="">-- Chưa phân phòng --</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>Ngày bắt đầu</label>
+                <input type="date" id="editStartDate">
+            </div>
+            <div class="form-row">
+                <label>Tình trạng</label>
+                <select id="editStatus">
+                    <option value="">-- Chọn --</option>
+                    <option value="Chính thức">Chính thức</option>
+                    <option value="Thử việc">Thử việc</option>
+                    <option value="Học việc">Học việc</option>
+                    <option value="TTS">TTS</option>
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeEditModal()">Huỷ</button>
+                <button class="btn btn-primary" onclick="saveEditEmployee()">Lưu</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SheetJS for Excel export -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+
+    <script>
+        const API_BASE = '/api';
+        // JS getDay() convention: 0=Sun, 1=Mon, ..., 6=Sat
+        const DAY_NAMES = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+        // Python weekday() convention: 0=Mon, ..., 5=Sat, 6=Sun
+        // JS getDay() map: Sun=0, Mon=1, Tue=2, ..., Sat=6
+        // Convert python weekday -> JS getDay:
+        const PY_TO_JS_DOW = (py) => (py + 1) % 7;
+        let currentData = null;
+        let departments = [];
+
+        // ------- Cache layer -------
+        // Each cache entry: { year, month, savedAt, data }
+        // Auto-delete entries older than 6 months.
+        const CACHE_KEY = 'checknv_sheet_cache';
+        const CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30 * 6; // 6 tháng
+
+        function readCache() {
+            try {
+                const raw = localStorage.getItem(CACHE_KEY);
+                if (!raw) return {};
+                const parsed = JSON.parse(raw);
+                return parsed && typeof parsed === 'object' ? parsed : {};
+            } catch (err) { return {}; }
+        }
+
+        function writeCache(cache) {
+            try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); }
+            catch (err) { console.warn('Cache write failed:', err); }
+        }
+
+        function purgeExpiredCache() {
+            const cache = readCache();
+            const now = Date.now();
+            let changed = false;
+            for (const k of Object.keys(cache)) {
+                if (!cache[k].savedAt || (now - cache[k].savedAt) > CACHE_TTL_MS) {
+                    delete cache[k];
+                    changed = true;
+                }
+            }
+            if (changed) writeCache(cache);
+            return cache;
+        }
+
+        function cacheKey(year, month) { return `${year}-${String(month).padStart(2, '0')}`; }
+
+        function updateCacheStatus(year, month) {
+            const cache = purgeExpiredCache();
+            const entry = cache[cacheKey(year, month)];
+            const el = document.getElementById('cacheStatus');
+            if (!el) return;
+            if (!entry) { el.textContent = ''; return; }
+            const date = new Date(entry.savedAt);
+            el.textContent = `(cache lưu ${date.toLocaleString('vi-VN')})`;
+        }
+
+        // ------- Init -------
+        function init() {
+            // Browser auto-attaches the HttpOnly session cookie; we just probe
+            // the server to find out if we're still logged in.
+            verifyPassword();
+            initMonthYear();
+        }
+
+        async function verifyPassword() {
+            // Cookies travel with credentials:'include' (or same-origin by
+            // default — admin.html is served from the same origin so plain
+            // fetch is fine, but include is explicit and future-proof).
+            try {
+                const res = await fetch(`${API_BASE}/auth/verify`, {
+                    credentials: 'include',
+                });
+                if (res.status === 401) {
+                    showLogin();
+                    return;
+                }
+                const data = await res.json().catch(() => ({}));
+                if (data.authenticated) {
+                    showMainApp();
+                    await loadDepartments();
+                    loadData();
+                } else {
+                    showLogin();
+                }
+            } catch (err) {
+                showLogin();
+            }
+        }
+
+        async function login() {
+            const password = document.getElementById('password').value;
+            if (!password) return;
+            try {
+                const res = await fetch(`${API_BASE}/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Basic ' + btoa('admin:' + password) },
+                    credentials: 'include',
+                });
+                if (res.ok) {
+                    document.getElementById('password').value = '';
+                    showMainApp();
+                    loadDepartments().then(loadData);
+                } else {
+                    document.getElementById('loginError').style.display = 'block';
+                }
+            } catch (err) {
+                document.getElementById('loginError').textContent = 'Lỗi kết nối';
+                document.getElementById('loginError').style.display = 'block';
+            }
+        }
+
+        async function logout() {
+            try {
+                await fetch(`${API_BASE}/auth/logout`, {
+                    method: 'POST',
+                    credentials: 'include',
+                });
+            } catch (err) { /* network glitch — still reset UI */ }
+            showLogin();
+        }
+
+        function showLogin() {
+            document.getElementById('loginPage').style.display = 'flex';
+            document.getElementById('mainApp').style.display = 'none';
+        }
+
+        function showMainApp() {
+            document.getElementById('loginPage').style.display = 'none';
+            document.getElementById('mainApp').style.display = 'block';
+        }
+
+        function initMonthYear() {
+            const now = new Date();
+            const monthSelect = document.getElementById('monthSelect');
+            const yearSelect = document.getElementById('yearSelect');
+            for (let m = 1; m <= 12; m++) {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = `Tháng ${m}`;
+                if (m === now.getMonth() + 1) opt.selected = true;
+                monthSelect.appendChild(opt);
+            }
+            for (let y = now.getFullYear() - 1; y <= now.getFullYear() + 1; y++) {
+                const opt = document.createElement('option');
+                opt.value = y;
+                opt.textContent = y;
+                if (y === now.getFullYear()) opt.selected = true;
+                yearSelect.appendChild(opt);
+            }
+        }
+
+        // ------- Toast -------
+        function toast(msg, kind = 'success') {
+            const el = document.getElementById('toast');
+            el.textContent = msg;
+            el.className = 'toast ' + kind;
+            el.style.display = 'block';
+            setTimeout(() => { el.style.display = 'none'; }, 3000);
+        }
+
+        // ------- Panels -------
+        function togglePanel(id) {
+            const p = document.getElementById(id);
+            // close others
+            document.querySelectorAll('.panel').forEach(el => {
+                if (el.id !== id) el.classList.remove('show');
+            });
+            const opening = !p.classList.contains('show');
+            p.classList.toggle('show');
+            if (opening) {
+                if (id === 'employeesPanel') loadEmployees();
+                if (id === 'departmentsPanel') loadDepartmentsList();
+                if (id === 'settingsPanel') loadBanSetting();
+            }
+        }
+
+        // ------- Departments -------
+        async function loadDepartments() {
+            try {
+                const res = await fetch(`${API_BASE}/employees/departments/all`);
+                departments = await res.json();
+                const sel = document.getElementById('newDepartment');
+                sel.innerHTML = '<option value="">-- Phòng ban --</option>';
+                departments.forEach(d => {
+                    sel.innerHTML += `<option value="${d.id}">${d.name}</option>`;
+                });
+            } catch (err) { console.log('Load departments failed'); }
+        }
+
+        async function loadDepartmentsList() {
+            await loadDepartments();
+            const tbody = document.getElementById('deptTableBody');
+            tbody.innerHTML = '';
+            departments.forEach((d, i) => {
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${i + 1}</td>
+                        <td style="text-align:left;">${d.name}</td>
+                        <td>${d.sort_order}</td>
+                        <td class="action-cell">
+                            <button class="btn btn-danger btn-sm" onclick="deleteDepartment(${d.id}, '${d.name.replace(/'/g, "\\'")}')">Xóa</button>
+                        </td>
+                    </tr>`;
+            });
+        }
+
+        async function addDepartment() {
+            const name = document.getElementById('newDeptName').value.trim();
+            const sort_order = parseInt(document.getElementById('newDeptOrder').value) || 99;
+            if (!name) { toast('Vui lòng nhập tên phòng ban', 'error'); return; }
+            try {
+                const res = await fetch(`${API_BASE}/employees/departments`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        credentials: 'include'
+                    },
+                    body: JSON.stringify({ name, sort_order })
+                });
+                if (res.ok) {
+                    document.getElementById('newDeptName').value = '';
+                    toast('Đã thêm phòng ban');
+                    loadDepartmentsList();
+                } else {
+                    const data = await res.json().catch(() => ({}));
+                    toast(data.detail || 'Lỗi thêm phòng ban', 'error');
+                }
+            } catch (err) { toast('Lỗi kết nối', 'error'); }
+        }
+
+        async function deleteDepartment(id, name) {
+            if (!confirm(`Xóa phòng ban "${name}"? Nhân viên thuộc phòng này sẽ được chuyển về "Chưa phân phòng".`)) return;
+            try {
+                const res = await fetch(`${API_BASE}/employees/departments/${id}`, {
+                    method: 'DELETE',
+                    headers: { credentials: 'include' }
+                });
+                if (res.ok) {
+                    toast('Đã xóa phòng ban');
+                    loadDepartmentsList();
+                    loadData();
+                } else {
+                    const data = await res.json().catch(() => ({}));
+                    toast(data.detail || 'Lỗi xóa', 'error');
+                }
+            } catch (err) { toast('Lỗi kết nối', 'error'); }
+        }
+
+        // ------- Employees -------
+        async function loadEmployees() {
+            try {
+                const res = await fetch(`${API_BASE}/employees`);
+                const employees = await res.json();
+                const tbody = document.getElementById('employeeTableBody');
+                tbody.innerHTML = '';
+                employees.forEach((emp, i) => {
+                    const start = emp.start_date ? emp.start_date : '';
+                    tbody.innerHTML += `
+                        <tr>
+                            <td>${i + 1}</td>
+                            <td><strong>${emp.code}</strong></td>
+                            <td style="text-align:left;">${emp.name}</td>
+                            <td style="text-align:left;">${emp.department_name || '<em style="color:#999;">Chưa phân</em>'}</td>
+                            <td>${start}</td>
+                            <td>${emp.status_label || ''}</td>
+                            <td class="action-cell">
+                                <button class="btn btn-edit btn-sm" onclick="editEmployee(${emp.id})">Sửa</button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteEmployee(${emp.id}, '${emp.name.replace(/'/g, "\\'")}')">Xóa</button>
+                            </td>
+                        </tr>`;
+                });
+            } catch (err) { console.log('Load employees failed'); }
+        }
+
+        async function addEmployee() {
+            const code = document.getElementById('newCode').value.trim();
+            const name = document.getElementById('newName').value.trim();
+            const department_id = document.getElementById('newDepartment').value || null;
+            const start_date = document.getElementById('newStartDate').value || null;
+            const status_label = document.getElementById('newStatus').value || null;
+            if (!code || !name) { toast('Vui lòng nhập mã NV và họ tên', 'error'); return; }
+            try {
+                const res = await fetch(`${API_BASE}/employees`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        credentials: 'include'
+                    },
+                    body: JSON.stringify({
+                        code, name,
+                        department_id: department_id ? parseInt(department_id) : null,
+                        start_date, status_label
+                    })
+                });
+                if (res.ok) {
+                    document.getElementById('newCode').value = '';
+                    document.getElementById('newName').value = '';
+                    document.getElementById('newStartDate').value = '';
+                    document.getElementById('newStatus').value = '';
+                    toast('Đã thêm nhân viên');
+                    loadEmployees();
+                    loadData();
+                } else {
+                    const data = await res.json().catch(() => ({}));
+                    toast(data.detail || 'Lỗi thêm NV', 'error');
+                }
+            } catch (err) { toast('Lỗi kết nối', 'error'); }
+        }
+
+        async function editEmployee(id) {
+            // Open modal pre-filled with current data.
+            try {
+                const res = await fetch(`${API_BASE}/employees`);
+                if (!res.ok) throw new Error('Fetch failed');
+                const employees = await res.json();
+                const emp = employees.find(e => e.id === id);
+                if (!emp) { toast('Không tìm thấy NV', 'error'); return; }
+
+                // Make sure departments list is loaded.
+                if (!departments || departments.length === 0) {
+                    const dRes = await fetch(`${API_BASE}/departments`);
+                    if (dRes.ok) departments = await dRes.json();
+                }
+
+                // Fill fields.
+                document.getElementById('editEmpId').value = emp.id;
+                document.getElementById('editCode').value = emp.code || '';
+                document.getElementById('editName').value = emp.name || '';
+                document.getElementById('editStartDate').value = emp.start_date || '';
+                document.getElementById('editStatus').value = emp.status_label || '';
+
+                // Populate department select.
+                const sel = document.getElementById('editDepartment');
+                sel.innerHTML = '<option value="">-- Chưa phân phòng --</option>';
+                (departments || []).forEach(d => {
+                    const opt = document.createElement('option');
+                    opt.value = d.id;
+                    opt.textContent = d.name;
+                    if (emp.department_id === d.id) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+
+                // Show modal.
+                document.getElementById('editModal').classList.add('show');
+                // Focus name field for quick edit.
+                setTimeout(() => document.getElementById('editName').focus(), 50);
+            } catch (err) {
+                console.error('editEmployee open failed:', err);
+                toast('Lỗi mở form sửa', 'error');
+            }
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').classList.remove('show');
+        }
+
+        async function saveEditEmployee() {
+            const id = document.getElementById('editEmpId').value;
+            const name = document.getElementById('editName').value.trim();
+            const deptVal = document.getElementById('editDepartment').value;
+            const startDate = document.getElementById('editStartDate').value || null;
+            const status = document.getElementById('editStatus').value || null;
+
+            if (!id) { toast('Lỗi: thiếu ID', 'error'); return; }
+            if (!name) { toast('Vui lòng nhập họ tên', 'error'); document.getElementById('editName').focus(); return; }
+
+            const payload = {
+                name,
+                department_id: deptVal ? parseInt(deptVal, 10) : null,
+                start_date: startDate,
+                status_label: status,
+            };
+
+            try {
+                const r = await fetch(`${API_BASE}/employees/${id}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        credentials: 'include'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                const data = await r.json().catch(() => ({}));
+                if (r.ok) {
+                    toast('Đã cập nhật nhân viên');
+                    closeEditModal();
+                    loadEmployees();
+                    loadData();
+                } else {
+                    toast(data.detail || 'Lỗi cập nhật', 'error');
+                }
+            } catch (err) {
+                console.error('save failed:', err);
+                toast('Lỗi kết nối', 'error');
+            }
+        }
+
+        // Close modal on Escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeEditModal();
+        });
+
+        async function deleteEmployee(id, name) {
+            if (!confirm(`Xóa nhân viên "${name}"? Toàn bộ dữ liệu chấm công của NV này cũng sẽ bị xóa.`)) return;
+            try {
+                const res = await fetch(`${API_BASE}/employees/${id}`, {
+                    method: 'DELETE',
+                    headers: { credentials: 'include' }
+                });
+                if (res.ok) {
+                    toast('Đã xóa nhân viên');
+                    loadEmployees();
+                    loadData();
+                } else {
+                    const d = await res.json().catch(() => ({}));
+                    toast(d.detail || 'Lỗi xóa', 'error');
+                }
+            } catch (err) { toast('Lỗi kết nối', 'error'); }
+        }
+
+        // ------- Settings -------
+        async function loadBanSetting() {
+            try {
+                const res = await fetch(`${API_BASE}/settings/ban-duration`);
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById('banMinutes').value = data.value;
+                }
+            } catch (err) {}
+        }
+
+        async function saveBanDuration() {
+            const minutes = parseInt(document.getElementById('banMinutes').value);
+            if (!minutes || minutes < 1) { toast('Thời gian cấm phải >= 1 phút', 'error'); return; }
+            try {
+                const res = await fetch(`${API_BASE}/settings/ban-duration`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        credentials: 'include'
+                    },
+                    body: JSON.stringify({ duration_minutes: minutes })
+                });
+                if (res.ok) toast('Đã lưu cấu hình');
+                else {
+                    const d = await res.json().catch(() => ({}));
+                    toast(d.detail || 'Lỗi lưu', 'error');
+                }
+            } catch (err) { toast('Lỗi kết nối', 'error'); }
+        }
+
+        // ------- Export Excel (use server-side template) -------
+        async function exportExcel() {
+            if (!currentData || !currentData.departments || currentData.departments.length === 0) {
+                toast('Không có dữ liệu để xuất', 'error');
+                return;
+            }
+            const month = parseInt(document.getElementById('monthSelect').value);
+            const year = parseInt(document.getElementById('yearSelect').value);
+            const url = `${API_BASE}/stats/export?month=${month}&year=${year}`;
+            try {
+                const res = await fetch(url, { credentials: 'include' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const blob = await res.blob();
+                const a = document.createElement('a');
+                const objUrl = URL.createObjectURL(blob);
+                a.href = objUrl;
+                a.download = `Bang cham cong - T${month}.${year}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(objUrl);
+                }, 100);
+                toast(`Đã xuất file T${month}.${year}`);
+            } catch (err) {
+                console.error('Export failed:', err);
+                toast('Lỗi xuất file', 'error');
+            }
+        }
+        async function loadData() {
+            const month = parseInt(document.getElementById('monthSelect').value);
+            const year = parseInt(document.getElementById('yearSelect').value);
+            const key = cacheKey(year, month);
+
+            // 1. Render cache first (instant display).
+            const cache = purgeExpiredCache();
+            const cached = cache[key];
+            if (cached && cached.data) {
+                currentData = cached.data;
+                renderSheet();
+                renderTotals();
+                updateCacheStatus(year, month);
+            } else {
+                updateCacheStatus(year, month);
+            }
+
+            // 2. Fetch from API and update cache + re-render.
+            try {
+                const res = await fetch(`${API_BASE}/stats/sheet?month=${month}&year=${year}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                currentData = await res.json();
+                // Save to cache.
+                cache[key] = { year, month, savedAt: Date.now(), data: currentData };
+                writeCache(cache);
+                renderSheet();
+                renderTotals();
+                updateCacheStatus(year, month);
+            } catch (err) {
+                console.error('Load data failed:', err);
+                if (!cached) {
+                    document.getElementById('sheetBody').innerHTML =
+                        '<tr><td style="padding:30px;color:#999;">Lỗi tải dữ liệu. Vui lòng thử lại.</td></tr>';
+                } else {
+                    toast('Mất kết nối - hiển thị dữ liệu cache', 'error');
+                }
+            }
+        }
+
+        function renderSheet() {
+            if (!currentData) return;
+            const head = document.getElementById('sheetHead');
+            const body = document.getElementById('sheetBody');
+
+            const dates = currentData.dates;
+            const departments = currentData.departments || [];
+
+            // Header row 1: dates (sun = weekend bg)
+            let headerHtml = '<tr>';
+            headerHtml += '<th class="th-stt">STT</th>';
+            headerHtml += '<th class="th-code">Mã NV</th>';
+            headerHtml += '<th class="th-name">Họ tên</th>';
+            // Header: d is a date string "YYYY-MM-DD"
+            // Use JS getDay() directly (0=Sun, 6=Sat) — matches DAY_NAMES index.
+            dates.forEach(d => {
+                const dow = new Date(d).getDay();
+                const isSun = dow === 0;
+                const isSat = dow === 6;
+                const cls = isSun ? 'weekend-sun' : (isSat ? 'saturday' : '');
+                const dayNum = d.slice(8, 10); // day of month
+                headerHtml += `<th class="date-header ${cls}">
+                    <div class="day-num">${dayNum}</div>
+                    <div class="day-name">${DAY_NAMES[dow]}</div>
+                </th>`;
+            });
+            headerHtml += `
+                <th class="summary-cell">Công chuẩn</th>
+                <th class="summary-cell">Công TT</th>
+                <th class="summary-cell">Công tác</th>
+                <th class="summary-cell">Nghỉ lễ</th>
+                <th class="summary-cell">Lễ đi làm</th>
+                <th class="summary-cell">Nghỉ H.Lương</th>
+                <th class="summary-cell">Nghỉ chế độ</th>
+                <th class="summary-cell">Nghỉ bù</th>
+                <th class="summary-cell">Làm NVP</th>
+                <th class="summary-cell">Nghỉ phép</th>
+                <th class="summary-cell">Công H.Lương</th>
+                <th class="summary-cell">Công thử việc</th>
+                <th class="summary-cell">Công chính thức</th>
+                <th class="summary-cell">Công TTS</th>
+                <th class="summary-cell">Công học việc</th>
+            `;
+            headerHtml += '</tr>';
+            head.innerHTML = headerHtml;
+
+            // Body: grouped by department
+            let bodyHtml = '';
+            let stt = 1;
+            const totalCols = 3 + dates.length + 15;
+
+            if (departments.length === 0) {
+                bodyHtml = `<tr><td colspan="${totalCols}" style="padding:30px;color:#999;">Chưa có nhân viên nào.</td></tr>`;
+                body.innerHTML = bodyHtml;
+                return;
+            }
+
+            departments.forEach(dept => {
+                if (dept.employees.length === 0) return;
+                // Department header row spanning all columns
+                bodyHtml += `<tr class="dept-row"><td colspan="${totalCols}">🏢 ${dept.department_name} (${dept.employees.length} NV)</td></tr>`;
+
+                dept.employees.forEach(emp => {
+                    bodyHtml += '<tr>';
+                    bodyHtml += `<td class="col-stt">${stt++}</td>`;
+                    bodyHtml += `<td class="col-code">${emp.employee_code}</td>`;
+                    bodyHtml += `<td class="col-name">${emp.employee_name}</td>`;
+
+                    emp.details.forEach(d => {
+                        // Backend returns Python weekday() (0=Mon..6=Sun).
+                        // Convert to JS getDay() for comparison consistency.
+                        const pyDow = d.day_of_week;
+                        const dow = PY_TO_JS_DOW(pyDow);  // 0=Sun, 6=Sat
+                        const isSun = dow === 0;
+                        const isSat = dow === 6;
+
+                        if (isSun) {
+                            bodyHtml += `<td class="weekend-sun cell-empty">-</td>`;
+                        } else if (d.status === 'on_time') {
+                            bodyHtml += `<td class="cell-on cell-content">${d.symbol || ''}</td>`;
+                        } else if (d.status === 'late') {
+                            bodyHtml += `<td class="cell-late cell-content" title="Muộn ${d.late_minutes}p">${d.symbol || ''}</td>`;
+                        } else if (d.status === 'early_leave') {
+                            bodyHtml += `<td class="cell-half cell-content" title="Về sớm ${d.early_minutes}p">${d.symbol || ''}</td>`;
+                        } else if (d.status === 'weekend') {
+                            bodyHtml += `<td class="saturday cell-empty">-</td>`;
+                        } else {
+                            bodyHtml += `<td class="cell-absent cell-content">0</td>`;
+                        }
+                    });
+
+                    bodyHtml += `<td class="summary-cell">${emp.standard_workdays || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.official_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.business_trip_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.holiday_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.holiday_work_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.paid_leave_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.maternity_leave_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.compensatory_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.office_work_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.unpaid_leave_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.paid_work_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.trial_work_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.official_work_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.tts_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell">${emp.intern_days || 0}</td>`;
+                    bodyHtml += '</tr>';
+                });
+            });
+
+            body.innerHTML = bodyHtml;
+        }
+
+        function renderTotals() {
+            if (!currentData) return;
+            const totals = { onTime: 0, late: 0, absent: 0, totalLate: 0, totalEarly: 0 };
+            let count = 0;
+
+            (currentData.departments || []).forEach(dept => {
+                dept.employees.forEach(emp => {
+                    totals.onTime += emp.days_on_time;
+                    totals.late += emp.days_late;
+                    totals.absent += emp.days_absent;
+                    totals.totalLate += emp.total_late_minutes;
+                    totals.totalEarly += emp.total_early_minutes;
+                    count++;
+                });
+            });
+
+            document.getElementById('totals').innerHTML = `
+                <div class="stat-card"><h3>Ngày đúng giờ</h3><div class="value on-time">${totals.onTime}</div></div>
+                <div class="stat-card"><h3>Ngày muộn</h3><div class="value late">${totals.late}</div></div>
+                <div class="stat-card"><h3>Ngày nghỉ</h3><div class="value absent">${totals.absent}</div></div>
+                <div class="stat-card"><h3>Tổng phút muộn</h3><div class="value late">${totals.totalLate}</div></div>
+                <div class="stat-card"><h3>Tổng phút về sớm</h3><div class="value late">${totals.totalEarly}</div></div>
+                <div class="stat-card"><h3>Số nhân viên</h3><div class="value">${count}</div></div>
+            `;
+        }
+
+        init();
+    </script>
+</body>
+</html>
