@@ -9,7 +9,8 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.database import engine, Base, run_migrations
-from app.routers import attendance, employees, stats, auth, settings, export, hidden
+from app import models as _models  # noqa: F401  — register models with Base
+from app.routers import attendance, employees, stats, auth, settings, export, hidden, holidays
 from app import crud, ratelimit
 
 
@@ -134,6 +135,7 @@ app.include_router(auth.router)
 app.include_router(settings.router)
 app.include_router(export.router)
 app.include_router(hidden.router)
+app.include_router(holidays.router)
 
 
 logger.info(

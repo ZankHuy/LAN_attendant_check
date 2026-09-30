@@ -69,6 +69,32 @@ def run_migrations() -> None:
         # Note: the `users` table is created by Base.metadata.create_all() from
         # the SQLAlchemy User model (see app/models.py). No raw SQL needed here.
 
+        # ── time_log & holidays tables are created by Base.metadata.create_all()
+        # from the SQLAlchemy models (TimeLog, Holiday). However, for older
+        # deployments where the table was created via raw SQL we ensure the
+        # indexes exist idempotently.
+        _ensure_table(conn, "time_log", [
+            "CREATE INDEX IF NOT EXISTS ix_timelog_emp_date ON time_log(employee_id, date)",
+            "CREATE INDEX IF NOT EXISTS ix_timelog_created_at ON time_log(created_at)",
+        ])
+        _ensure_table(conn, "holidays", [
+            "CREATE INDEX IF NOT EXISTS ix_holidays_date ON holidays(date)",
+            "CREATE INDEX IF NOT EXISTS ix_holidays_emp_date ON holidays(employee_id, date)",
+        ])
+
+
+def _ensure_table(conn, table_name: str, post_sql: list[str]) -> None:
+    """Run a list of idempotent SQL statements if the table exists.
+
+    Used for additive migrations that don't need schema changes — just
+    extra indexes.
+    """
+    cols = _table_columns(conn, table_name)
+    if not cols:
+        return
+    for stmt in post_sql:
+        conn.execute(text(stmt))
+
 
 def get_db():
     db = SessionLocal()

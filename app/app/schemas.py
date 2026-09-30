@@ -124,10 +124,15 @@ class DailyStats(BaseModel):
     day_of_week: int  # 0=Mon, 6=Sun
     checkin_time: Optional[datetime]
     checkout_time: Optional[datetime]
-    status: str  # on_time, late, early_leave, absent, weekend, holiday
+    checkin_display: str = ""       # "HH:MM" | "" | "No"
+    checkout_display: str = ""      # "HH:MM" | "" | "No"
+    work_value: Optional[float] = None  # 1 | 0.5 | 0 | None (future)
+    status: str  # on_time, late, early_leave, absent, weekend, holiday, future, no_checkout, half_day
     late_minutes: int
     early_minutes: int
-    symbol: str = ""  # Ký hiệu hiển thị: 1, 0.5, NL, 1P, NB, OL... mặc định ""
+    symbol: str = ""  # Ký hiệu hiển thị: 1, 0.5, 0, hoặc ""
+    checkin_status: Optional[str] = None   # "normal" | "late" | "faulty" | None
+    checkout_status: Optional[str] = None  # "normal" | "early" | "faulty" | "no_checkout" | None
 
 class EmployeeStats(BaseModel):
     employee_id: int

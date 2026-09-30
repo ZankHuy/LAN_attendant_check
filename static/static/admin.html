@@ -135,6 +135,19 @@
             font-size: 14px;
         }
 
+        /* 3-row layout: cong / checkin / checkout */
+        .row-cong { background: #ffffff; font-weight: 600; }
+        .row-checkin { background: #fafafa; color: #555; font-size: 11px; }
+        .row-checkout { background: #f4f4f4; color: #555; font-size: 11px; }
+        .cell-future { color: #ccc; }
+        .cell-holiday { background: #cfe2ff; color: #084298; font-weight: 600; }
+        .row-checkin.empty, .row-checkout.empty { color: #ccc; }
+
+        /* Highlight màu cho checkin/checkout */
+        .ci-normal, .co-normal { color: #155724; background: #d4edda; }      /* đúng giờ - xanh lá nhạt */
+        .ci-late, .co-early { color: #856404; background: #fff3cd; }          /* muộn / về sớm - vàng */
+        .ci-faulty, .co-faulty { color: #721c24; background: #f8d7da; font-weight: 600; } /* lỗi - đỏ */
+
         /* Summary columns */
         .summary-cell { background: #f8f9fa; font-weight: 600; }
 
@@ -238,6 +251,7 @@
                     <button class="btn btn-secondary" onclick="togglePanel('employeesPanel')">👥 Quản lý NV</button>
                     <button class="btn btn-secondary" onclick="togglePanel('departmentsPanel')">🏢 Phòng ban</button>
                     <button class="btn btn-secondary" onclick="togglePanel('settingsPanel')">⚙ Cấu hình</button>
+                    <button class="btn btn-secondary" onclick="togglePanel('holidaysPanel')">📅 Ngày lễ/Phép</button>
                     <button class="btn btn-secondary" onclick="window.location.href='/'">Trang Chấm Công</button>
                     <button class="btn btn-danger" onclick="logout()">Đăng Xuất</button>
                 </div>
@@ -305,6 +319,49 @@
                     </small>
                 </div>
 
+                <!-- Holidays / Paid-Leave Panel -->
+                <div class="panel" id="holidaysPanel">
+                    <h3>📅 Quản lý ngày lễ / nghỉ phép</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:10px;">
+                        Ngày lễ (L) hoặc nghỉ phép (P) ghi đè công thường: T2-T6 = 1 công, T7 = 0.5 công, CN = không tính.
+                    </p>
+                    <div class="row" style="border:1px solid #e0e0e0;padding:10px;border-radius:6px;margin-bottom:10px;">
+                        <strong style="width:100%;margin-bottom:4px;color:#555;">Thêm cho tất cả NV:</strong>
+                        <input type="date" id="holDateAll" title="Ngày lễ/nghỉ">
+                        <select id="holKindAll" style="width:140px;">
+                            <option value="L">Lễ (L)</option>
+                            <option value="P">Phép (P)</option>
+                        </select>
+                        <input type="text" id="holLabelAll" placeholder="Nhãn (vd: Lễ 2/9)" style="width:200px;">
+                        <button class="btn btn-primary" onclick="addHolidayAll()">+ Thêm cho tất cả</button>
+                    </div>
+                    <div class="row" style="border:1px solid #e0e0e0;padding:10px;border-radius:6px;margin-bottom:10px;">
+                        <strong style="width:100%;margin-bottom:4px;color:#555;">Thêm cho 1 NV cụ thể:</strong>
+                        <input type="date" id="holDateEmp" title="Ngày">
+                        <select id="holKindEmp" style="width:140px;">
+                            <option value="L">Lễ (L)</option>
+                            <option value="P">Phép (P)</option>
+                        </select>
+                        <input type="text" id="holLabelEmp" placeholder="Nhãn (vd: Phép ốm)" style="width:200px;">
+                        <select id="holEmployee" style="width:200px;"><option value="">-- NV --</option></select>
+                        <button class="btn btn-primary" onclick="addHolidayEmployee()">+ Thêm cho NV</button>
+                    </div>
+                    <table class="employee-table">
+                        <thead>
+                            <tr>
+                                <th>STT</th>
+                                <th>Ngày</th>
+                                <th>Loại</th>
+                                <th>Phạm vi</th>
+                                <th>Nhân viên</th>
+                                <th>Nhãn</th>
+                                <th>Thao tác</th>
+                            </tr>
+                        </thead>
+                        <tbody id="holidayTableBody"></tbody>
+                    </table>
+                </div>
+
                 <!-- Toolbar -->
                 <div class="toolbar">
                     <div class="toolbar-left">
@@ -320,6 +377,9 @@
                         <div class="legend-item"><div class="legend-color" style="background:#ffe69c;"></div><span>Nửa ngày (0.5)</span></div>
                         <div class="legend-item"><div class="legend-color" style="background:#f8d7da;"></div><span>Nghỉ (0)</span></div>
                         <div class="legend-item"><div class="legend-color" style="background:#e0e0e0;"></div><span>Chủ nhật</span></div>
+                        <div class="legend-item"><div class="legend-color" style="background:#d4edda;border:1px solid #155724;"></div><span>Checkin/Out đúng giờ</span></div>
+                        <div class="legend-item"><div class="legend-color" style="background:#fff3cd;border:1px solid #856404;"></div><span>Muộn/Về sớm</span></div>
+                        <div class="legend-item"><div class="legend-color" style="background:#f8d7da;border:1px solid #721c24;"></div><span>Lỗi (0 công)</span></div>
                     </div>
                 </div>
 
@@ -948,7 +1008,10 @@
             headerHtml += '</tr>';
             head.innerHTML = headerHtml;
 
-            // Body: grouped by department
+            // Body: grouped by department. Mỗi NV hiển thị 3 dòng:
+            //   row 1 = số công của ngày
+            //   row 2 = giờ checkin
+            //   row 3 = giờ checkout
             let bodyHtml = '';
             let stt = 1;
             const totalCols = 3 + dates.length + 15;
@@ -959,56 +1022,93 @@
                 return;
             }
 
+            const symbolClass = (d) => {
+                if (d.status === 'holiday') return 'cell-holiday';
+                if (d.work_value === 1) return 'cell-on';
+                if (d.work_value === 0.5) return 'cell-half';
+                if (d.work_value === 0) return 'cell-absent';
+                if (d.status === 'future') return 'cell-future';
+                return '';
+            };
+            const symbolText = (d) => {
+                if (d.status === 'future') return '-';
+                if (d.work_value === 1) return '1';
+                if (d.work_value === 0.5) return '0.5';
+                if (d.work_value === 0) return '0';
+                return '-';
+            };
+            const dayCells = (rowCls, getter, isEmpty) => {
+                let html = '';
+                emp.details.forEach(d => {
+                    const val = getter(d);
+                    const cls = isEmpty(d) ? 'cell-future' : symbolClass(d);
+                    const txt = val === '' || val == null ? '-' : val;
+                    html += `<td class="${rowCls} ${cls} cell-content">${txt}</td>`;
+                });
+                return html;
+            };
+
             departments.forEach(dept => {
                 if (dept.employees.length === 0) return;
-                // Department header row spanning all columns
                 bodyHtml += `<tr class="dept-row"><td colspan="${totalCols}">🏢 ${dept.department_name} (${dept.employees.length} NV)</td></tr>`;
 
                 dept.employees.forEach(emp => {
-                    bodyHtml += '<tr>';
-                    bodyHtml += `<td class="col-stt">${stt++}</td>`;
-                    bodyHtml += `<td class="col-code">${emp.employee_code}</td>`;
-                    bodyHtml += `<td class="col-name">${emp.employee_name}</td>`;
-
+                    // Dòng 1: số công
+                    bodyHtml += '<tr class="row-cong">';
+                    bodyHtml += `<td class="col-stt" rowspan="3">${stt}</td>`;
+                    bodyHtml += `<td class="col-code" rowspan="3">${emp.employee_code}</td>`;
+                    bodyHtml += `<td class="col-name" rowspan="3">${emp.employee_name}</td>`;
                     emp.details.forEach(d => {
-                        // Backend returns Python weekday() (0=Mon..6=Sun).
-                        // Convert to JS getDay() for comparison consistency.
-                        const pyDow = d.day_of_week;
-                        const dow = PY_TO_JS_DOW(pyDow);  // 0=Sun, 6=Sat
-                        const isSun = dow === 0;
-                        const isSat = dow === 6;
-
-                        if (isSun) {
-                            bodyHtml += `<td class="weekend-sun cell-empty">-</td>`;
-                        } else if (d.status === 'on_time') {
-                            bodyHtml += `<td class="cell-on cell-content">${d.symbol || ''}</td>`;
-                        } else if (d.status === 'late') {
-                            bodyHtml += `<td class="cell-late cell-content" title="Muộn ${d.late_minutes}p">${d.symbol || ''}</td>`;
-                        } else if (d.status === 'early_leave') {
-                            bodyHtml += `<td class="cell-half cell-content" title="Về sớm ${d.early_minutes}p">${d.symbol || ''}</td>`;
-                        } else if (d.status === 'weekend') {
-                            bodyHtml += `<td class="saturday cell-empty">-</td>`;
-                        } else {
-                            bodyHtml += `<td class="cell-absent cell-content">0</td>`;
-                        }
+                        const txt = symbolText(d);
+                        const cls = d.status === 'future' ? 'cell-future'
+                            : (d.status === 'holiday' ? 'cell-holiday'
+                            : symbolClass(d));
+                        bodyHtml += `<td class="${cls} cell-content">${txt}</td>`;
                     });
-
-                    bodyHtml += `<td class="summary-cell">${emp.standard_workdays || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.official_days || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.business_trip_days || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.holiday_days || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.holiday_work_days || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.paid_leave_days || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.maternity_leave_days || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.compensatory_days || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.office_work_days || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.unpaid_leave_days || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.paid_work_days || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.trial_work_days || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.official_work_days || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.tts_days || 0}</td>`;
-                    bodyHtml += `<td class="summary-cell">${emp.intern_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${emp.standard_workdays || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${(emp.official_days || 0).toFixed ? emp.official_days.toFixed(2) : emp.official_days}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${emp.business_trip_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${emp.holiday_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${emp.holiday_work_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${emp.paid_leave_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${emp.maternity_leave_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${emp.compensatory_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${emp.office_work_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${emp.unpaid_leave_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${(emp.paid_work_days || 0).toFixed ? emp.paid_work_days.toFixed(2) : emp.paid_work_days}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${(emp.trial_work_days || 0).toFixed ? emp.trial_work_days.toFixed(2) : emp.trial_work_days}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${(emp.official_work_days || 0).toFixed ? emp.official_work_days.toFixed(2) : emp.official_work_days}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${emp.tts_days || 0}</td>`;
+                    bodyHtml += `<td class="summary-cell" rowspan="3">${(emp.intern_days || 0).toFixed ? emp.intern_days.toFixed(2) : emp.intern_days}</td>`;
                     bodyHtml += '</tr>';
+
+                    // Dòng 2: giờ checkin (highlight theo checkin_status)
+                    bodyHtml += '<tr class="row-checkin">';
+                    emp.details.forEach(d => {
+                        const v = d.checkin_display || '-';
+                        const s = d.checkin_status || '';
+                        let cls = '';
+                        if (s === 'normal') cls = 'ci-normal';
+                        else if (s === 'late') cls = 'ci-late';
+                        else if (s === 'faulty') cls = 'ci-faulty';
+                        bodyHtml += `<td class="${cls}">${v}</td>`;
+                    });
+                    bodyHtml += '</tr>';
+
+                    // Dòng 3: giờ checkout (highlight theo checkout_status)
+                    bodyHtml += '<tr class="row-checkout">';
+                    emp.details.forEach(d => {
+                        const v = d.checkout_display || '-';
+                        const s = d.checkout_status || '';
+                        let cls = '';
+                        if (s === 'normal') cls = 'co-normal';
+                        else if (s === 'early') cls = 'co-early';
+                        else if (s === 'faulty') cls = 'co-faulty';
+                        bodyHtml += `<td class="${cls}">${v}</td>`;
+                    });
+                    bodyHtml += '</tr>';
+
+                    stt++;
                 });
             });
 
@@ -1040,6 +1140,129 @@
                 <div class="stat-card"><h3>Số nhân viên</h3><div class="value">${count}</div></div>
             `;
         }
+
+        // ------- Holidays -------
+        async function loadHolidays() {
+            const month = parseInt(document.getElementById('monthSelect').value);
+            const year = parseInt(document.getElementById('yearSelect').value);
+            try {
+                const res = await fetch(`${API_BASE}/holidays?year=${year}&month=${month}`, {
+                    credentials: 'include'
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const rows = await res.json();
+                const tbody = document.getElementById('holidayTableBody');
+                tbody.innerHTML = '';
+                rows.forEach((h, i) => {
+                    const kindLabel = h.kind === 'L' ? '<span class="badge badge-on">Lễ</span>' : '<span class="badge badge-early">Phép</span>';
+                    const scope = h.scope === 'all' ? 'Tất cả' : `NV: ${h.employee_name || '#'+h.employee_id}`;
+                    tbody.innerHTML += `
+                        <tr>
+                            <td>${i + 1}</td>
+                            <td>${h.date}</td>
+                            <td>${kindLabel}</td>
+                            <td style="text-align:left;">${scope}</td>
+                            <td style="text-align:left;">${h.employee_name || '<em style="color:#999;">—</em>'}</td>
+                            <td style="text-align:left;">${h.label || ''}</td>
+                            <td><button class="btn btn-danger btn-sm" onclick="deleteHoliday(${h.id})">Xóa</button></td>
+                        </tr>`;
+                });
+            } catch (err) { console.log('Load holidays failed'); }
+        }
+
+        async function populateHolidayEmployeeSelect() {
+            const sel = document.getElementById('holEmployee');
+            try {
+                const res = await fetch(`${API_BASE}/employees`, { credentials: 'include' });
+                const emps = await res.json();
+                sel.innerHTML = '<option value="">-- NV --</option>';
+                emps.forEach(e => {
+                    sel.innerHTML += `<option value="${e.id}">${e.code} - ${e.name}</option>`;
+                });
+            } catch (err) { /* ignore */ }
+        }
+
+        async function addHolidayAll() {
+            const date = document.getElementById('holDateAll').value;
+            const kind = document.getElementById('holKindAll').value;
+            const label = document.getElementById('holLabelAll').value.trim() || null;
+            if (!date) { toast('Chọn ngày', 'error'); return; }
+            try {
+                const res = await fetch(`${API_BASE}/holidays`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', credentials: 'include' },
+                    body: JSON.stringify({ date, kind, label, scope: 'all' })
+                });
+                if (res.ok) {
+                    toast('Đã thêm ngày lễ/phép');
+                    document.getElementById('holDateAll').value = '';
+                    document.getElementById('holLabelAll').value = '';
+                    loadHolidays();
+                    loadData();
+                } else {
+                    const d = await res.json().catch(() => ({}));
+                    toast(d.detail || 'Lỗi', 'error');
+                }
+            } catch (err) { toast('Lỗi kết nối', 'error'); }
+        }
+
+        async function addHolidayEmployee() {
+            const date = document.getElementById('holDateEmp').value;
+            const kind = document.getElementById('holKindEmp').value;
+            const label = document.getElementById('holLabelEmp').value.trim() || null;
+            const employee_id = document.getElementById('holEmployee').value;
+            if (!date) { toast('Chọn ngày', 'error'); return; }
+            if (!employee_id) { toast('Chọn nhân viên', 'error'); return; }
+            try {
+                const res = await fetch(`${API_BASE}/holidays`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', credentials: 'include' },
+                    body: JSON.stringify({
+                        date, kind, label,
+                        scope: 'employee',
+                        employee_id: parseInt(employee_id, 10),
+                    })
+                });
+                if (res.ok) {
+                    toast('Đã thêm ngày lễ/phép cho NV');
+                    document.getElementById('holDateEmp').value = '';
+                    document.getElementById('holLabelEmp').value = '';
+                    loadHolidays();
+                    loadData();
+                } else {
+                    const d = await res.json().catch(() => ({}));
+                    toast(d.detail || 'Lỗi', 'error');
+                }
+            } catch (err) { toast('Lỗi kết nối', 'error'); }
+        }
+
+        async function deleteHoliday(id) {
+            if (!confirm(`Xóa ngày lễ/phép id=${id}? Ngày đó sẽ được tính lại theo chấm công thông thường.`)) return;
+            try {
+                const res = await fetch(`${API_BASE}/holidays/${id}`, {
+                    method: 'DELETE',
+                    credentials: 'include'
+                });
+                if (res.ok) {
+                    toast('Đã xóa');
+                    loadHolidays();
+                    loadData();
+                } else {
+                    const d = await res.json().catch(() => ({}));
+                    toast(d.detail || 'Lỗi', 'error');
+                }
+            } catch (err) { toast('Lỗi kết nối', 'error'); }
+        }
+
+        // Load holidays + populate NV select when toggling panel.
+        const _origTogglePanel = togglePanel;
+        togglePanel = function(id) {
+            _origTogglePanel(id);
+            if (id === 'holidaysPanel') {
+                populateHolidayEmployeeSelect();
+                loadHolidays();
+            }
+        };
 
         init();
     </script>

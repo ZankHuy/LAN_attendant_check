@@ -138,3 +138,53 @@ class RateLimitBucket(Base):
     employee_id = Column(Integer, primary_key=True)
     count = Column(Integer, nullable=False, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TimeLog(Base):
+    """Append-only time log for every checkin/checkout action.
+
+    Each row represents one physical checkin or checkout action.
+    The `attendance` table is a denormalized summary (MIN(checkin), MAX(checkout))
+    computed from this table.
+
+    `is_manual=True` means the row was inserted by admin/hidden (for fixing
+    forgotten checkouts, etc). Admin edits are tracked via `actor='hidden'`.
+    """
+    __tablename__ = "time_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    action = Column(String(20), nullable=False)        # 'checkin' | 'checkout'
+    time_value = Column(DateTime, nullable=False)
+    device_id = Column(String(100), nullable=True)
+    client_ip = Column(String(50), nullable=True)
+    is_manual = Column(Boolean, default=False, nullable=False)
+    actor = Column(String(50), default="kiosk", nullable=False)  # 'kiosk' | 'hidden' | 'admin'
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint('employee_id', 'date', 'action', name='uq_timelog_emp_date_action'),
+    )
+
+
+class Holiday(Base):
+    """Holiday / paid-leave day entries.
+
+    `kind`:
+      - 'L' = Nghi le (public holiday)
+      - 'P' = Nghi phep (paid leave)
+    `scope`:
+      - 'all'      = ap dung cho tat ca nhan vien
+      - 'employee' = ap dung cho 1 nhan vien cu the (employee_id NOT NULL)
+    """
+    __tablename__ = "holidays"
+
+    id = Column(Integer, primary_key=True, index=True)
+    date = Column(Date, nullable=False, index=True)
+    kind = Column(String(10), nullable=False)          # 'L' | 'P'
+    label = Column(String(100), nullable=True)
+    scope = Column(String(20), nullable=False)         # 'all' | 'employee'
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_by = Column(String(50), default="admin", nullable=False)

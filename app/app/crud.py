@@ -1,6 +1,13 @@
 from sqlalchemy.orm import Session
-from app.models import Admin, User, Employee, Attendance, Device, DeviceBan, Setting, Department
+from app.models import (
+    Admin, User, Employee, Attendance, Device, DeviceBan, Setting, Department,
+    TimeLog, Holiday,
+)
 from app.database import SessionLocal
+from app.log_timelog import (
+    record_checkin as _record_checkin,
+    record_checkout as _record_checkout,
+)
 from datetime import datetime, date, time, timedelta
 from typing import Optional, List
 import bcrypt
@@ -332,8 +339,12 @@ def get_attendance_by_employee_today(db: Session, employee_id: int, today: date)
         Attendance.date == today
     ).first()
 
-def checkin(db: Session, employee_id: int, device_id: str) -> Attendance:
-    """Checkin using employee_id. Banned device blocks this action only."""
+def checkin(db: Session, employee_id: int, device_id: str, client_ip: Optional[str] = None) -> Attendance:
+    """Checkin using employee_id. Banned device blocks this action only.
+
+    Writes the action to `time_log` (source of truth) and keeps `attendance`
+    summary in sync via `log_timelog`.
+    """
     today = date.today()
     now = datetime.now()
 
@@ -352,41 +363,43 @@ def checkin(db: Session, employee_id: int, device_id: str) -> Attendance:
         )
 
     # 2. Employee must not already have a checkin today.
-    existing = get_attendance_by_employee_today(db, employee_id, today)
-    if existing and existing.checkin_time:
+    existing_tl = db.query(TimeLog).filter(
+        TimeLog.employee_id == employee_id,
+        TimeLog.date == today,
+        TimeLog.action == "checkin",
+    ).first()
+    if existing_tl:
         raise ValueError("Bạn đã checkin hôm nay rồi")
 
-    # 3. Determine shift (AM if checkin <= 12:00, PM otherwise).
-    shift = "AM" if now.time() <= AM_CHECKIN_LATEST else "PM"
-
-    # 4. Compute deadline and is_on_time for the shift.
-    if shift == "AM":
-        deadline = get_am_deadline(db, today)
-        is_on_time = now.time() <= deadline
-    else:
-        deadline = PM_SHIFT_DEADLINE
-        is_on_time = now.time() <= deadline
-
-    # 5. Create the attendance record.
-    attendance = Attendance(
+    # 3. Record into time_log (this also upserts the attendance summary row).
+    _record_checkin(
+        db,
         employee_id=employee_id,
-        date=today,
-        checkin_time=now,
-        checkin_device_id=device_id,
-        is_on_time=is_on_time,
-        shift=shift,
+        target_date=today,
+        time_value=now,
+        device_id=device_id,
+        client_ip=client_ip,
+        actor="kiosk",
     )
-    db.add(attendance)
 
-    # 6. Ban this device for future checkin actions.
+    # 4. Ban this device for future checkin actions.
     create_ban(db, device_id, "checkin", employee_id, get_ban_minutes(db))
 
     db.commit()
-    db.refresh(attendance)
-    return attendance
-def checkout(db: Session, employee_id: int, device_id: str) -> Attendance:
+    # Return the refreshed attendance summary.
+    att = get_attendance_by_employee_today(db, employee_id, today)
+    if att is None:
+        # Should not happen but guard against race.
+        raise ValueError("Không thể tạo bản ghi chấm công")
+    db.refresh(att)
+    return att
+
+
+def checkout(db: Session, employee_id: int, device_id: str, client_ip: Optional[str] = None) -> Attendance:
     """Checkout by employee_id. Device does not have to match checkin device.
-    Banned device blocks this action only."""
+
+    Writes the action to `time_log` and keeps `attendance` summary in sync.
+    """
     today = date.today()
     now = datetime.now()
 
@@ -404,57 +417,44 @@ def checkout(db: Session, employee_id: int, device_id: str) -> Attendance:
             f"vui lòng đợi khoảng {remaining} phút"
         )
 
-    # 2. Find today's checkin record by employee_id (device is irrelevant).
-    attendance = get_attendance_by_employee_today(db, employee_id, today)
-    if not attendance or not attendance.checkin_time:
+    # 2. Employee must have a checkin today (otherwise can't checkout).
+    existing_ci = db.query(TimeLog).filter(
+        TimeLog.employee_id == employee_id,
+        TimeLog.date == today,
+        TimeLog.action == "checkin",
+    ).first()
+    if not existing_ci:
         raise ValueError("Bạn chưa checkin hôm nay")
-    if attendance.checkout_time:
+
+    # 3. Refuse if already checked out.
+    existing_co = db.query(TimeLog).filter(
+        TimeLog.employee_id == employee_id,
+        TimeLog.date == today,
+        TimeLog.action == "checkout",
+    ).first()
+    if existing_co:
         raise ValueError("Bạn đã checkout rồi")
 
-    # 3. Determine shift (use stored shift or infer from checkin_time).
-    shift = attendance.shift or ("AM" if attendance.checkin_time.time() <= AM_CHECKIN_LATEST else "PM")
-    weekday = today.weekday()
-    co_time = now.time()
-
-    # 4. Compute is_early_leave and early_leave_minutes.
-    if weekday == 5:  # Saturday
-        is_early_leave = co_time < SATURDAY_SHIFT_END
-        early_leave_minutes = None
-        if is_early_leave:
-            early_leave_minutes = (
-                SATURDAY_SHIFT_END.hour * 60 + SATURDAY_SHIFT_END.minute
-            ) - (co_time.hour * 60 + co_time.minute)
-    else:
-        # Weekdays: early_leave if checkout before the configured PM deadline
-        pm_deadline = get_pm_deadline(db, today)
-        is_early_leave = co_time < pm_deadline
-        early_leave_minutes = None
-        if is_early_leave:
-            early_leave_minutes = (
-                pm_deadline.hour * 60 + pm_deadline.minute
-            ) - (co_time.hour * 60 + co_time.minute)
-
-    # 5. Compute is_full_day: checkin <= AM deadline AND checkout >= PM deadline.
-    am_deadline = get_am_deadline(db, today)
-    pm_deadline = get_pm_deadline(db, today)
-    is_full_day = (
-        attendance.checkin_time.time() <= am_deadline
-        and co_time >= pm_deadline
+    # 4. Record into time_log.
+    _record_checkout(
+        db,
+        employee_id=employee_id,
+        target_date=today,
+        time_value=now,
+        device_id=device_id,
+        client_ip=client_ip,
+        actor="kiosk",
     )
 
-    # 6. Set checkout fields.
-    attendance.checkout_time = now
-    attendance.checkout_device_id = device_id
-    attendance.is_early_leave = is_early_leave
-    attendance.is_full_day = is_full_day
-    attendance.early_leave_minutes = early_leave_minutes
-
-    # 7. Ban this device for future checkout actions.
+    # 5. Ban this device for future checkout actions.
     create_ban(db, device_id, "checkout", employee_id, get_ban_minutes(db))
 
     db.commit()
-    db.refresh(attendance)
-    return attendance
+    att = get_attendance_by_employee_today(db, employee_id, today)
+    if att is None:
+        raise ValueError("Không thể cập nhật bản ghi chấm công")
+    db.refresh(att)
+    return att
 
 def get_attendance_status_for_device(db: Session, device_id: str) -> dict:
     """Today's status keyed by the device used to checkin.
@@ -494,10 +494,210 @@ def get_attendance_status_for_device(db: Session, device_id: str) -> dict:
     }
 
 # ---------------- Stats ----------------
+# Threshold times used by compute_work_day.
+NOON = time(12, 0)
+HALF_DAY_PM_BORDER = time(13, 30)   # Checkout < 13:30 AND checkin > 12:00 = 0 cong (PM-loi)
+AM_CHECKIN_NORMAL_END = time(8, 30)        # Checkin đúng giờ nếu timein < 8:30
+PM_CHECKIN_OK_BORDER = time(13, 30)        # Checkin được tính đúng giờ nếu 12:00 < timein < 13:30
+PM_CHECKOUT_OK_END = time(18, 0)           # Checkout đúng giờ nếu timeout > 18:00 (full day)
+NOON_END = time(12, 0)                     # Checkout đúng giờ nếu 12:00 < timeout < 13:30 (PM)
+CHECKIN_FAULTY = time(18, 0)               # Checkin lỗi: timein > 18:00 → 0 công
+CHECKOUT_FAULTY = time(8, 30)              # Checkout lỗi: timeout < 8:30 → 0 công
+
+
+def classify_checkin(ci_t: time, dow: int) -> str:
+    """Trả về 1 trong: 'normal' | 'late' | 'pm_late' | 'faulty'.
+
+    Quy tắc highlight (áp dụng T2-CN, kể cả T7):
+      - normal: timein < 8:30  HOẶC  12:00 < timein < 13:30
+      - late:   8:30 ≤ timein ≤ 12:00  (muộn AM)  HOẶC  13:30 ≤ timein ≤ 18:00 (muộn PM)
+      - faulty: timein > 18:00 (lỗi — NV checkin ngày hôm sau hoặc ghi nhầm)
+    """
+    if ci_t < AM_CHECKIN_NORMAL_END:
+        return "normal"
+    if ci_t <= NOON:
+        return "late"        # muộn AM (8:30–12:00)
+    if ci_t < PM_CHECKIN_OK_BORDER:
+        return "normal"      # 12:00–13:30 = nghỉ trưa, tính như đúng giờ PM
+    if ci_t <= CHECKIN_FAULTY:
+        return "late"        # 13:30–18:00 = muộn PM
+    return "faulty"          # > 18:00 = lỗi
+
+
+def classify_checkout(co_t: time, dow: int) -> str:
+    """Trả về 1 trong: 'normal' | 'early' | 'faulty' | 'no_checkout'.
+
+    Quy tắc highlight:
+      - normal:  12:00 < timeout < 13:30  (checkout đầu giờ chiều — tính đúng giờ PM)
+                 HOẶC timeout ≥ 18:00 (full day)
+      - early:   các trường hợp còn lại (checkout sớm)
+      - faulty:  timeout < 8:30 (lỗi — checkout quá sớm / sai ngày)
+    """
+    if co_t < CHECKOUT_FAULTY:
+        return "faulty"
+    if NOON_END < co_t < PM_CHECKIN_OK_BORDER:
+        return "normal"
+    if co_t >= PM_CHECKOUT_OK_END:
+        return "normal"
+    return "early"
+
+
+def compute_work_day(
+    checkin_dt: Optional[datetime],
+    checkout_dt: Optional[datetime],
+    target_date: date,
+) -> dict:
+    """Return the work-value for one (employee, date) cell.
+
+    Returns a dict:
+      - work_value: 0 | 0.5 | 1 | None (None = Chủ nhật, không tính)
+      - status:     one of "weekend", "absent", "no_checkout",
+                    "on_time", "late", "early_leave", "half_day",
+                    "checkin_faulty", "checkout_faulty"
+      - symbol:     "1", "0.5", "0", or ""  (display-friendly)
+      - is_holiday: bool  (called externally; default False here)
+      - holiday_kind: "L" | "P" | None
+      - checkin_status:   "normal" | "late" | "faulty" | None
+      - checkout_status:  "normal" | "early" | "faulty" | None
+
+    Quy tắc (mới, on-the-fly, không cache):
+      - CN (dow=6): work_value=None
+      - Không checkin: work_value=0, status=absent
+      - T2-T6:
+          * checkin > 18:00 (lỗi)                              → 0
+          * checkout < 8:30 và có checkin (lỗi)                → 0
+          * checkin <= 12:00 AND checkout >= 13:30             → 1
+          * checkin <= 12:00 AND checkout <  13:30             → 0.5 (buổi sáng)
+          * checkin >  12:00 AND checkout <  13:30             → 0   (PM lỗi)
+          * checkin >  12:00 (có/không checkout)               → 0.5 (buổi chiều)
+      - T7 (dow=5): bất kỳ checkin nào → 0.5
+    """
+    dow = target_date.weekday()
+
+    if dow == 6:  # Sunday
+        return {
+            "work_value": None,
+            "status": "weekend",
+            "symbol": "",
+            "is_holiday": False,
+            "holiday_kind": None,
+            "checkin_status": None,
+            "checkout_status": None,
+        }
+
+    if checkin_dt is None:
+        return {
+            "work_value": 0,
+            "status": "absent",
+            "symbol": "0",
+            "is_holiday": False,
+            "holiday_kind": None,
+            "checkin_status": None,
+            "checkout_status": None,
+        }
+
+    ci_t = checkin_dt.time()
+    co_t = checkout_dt.time() if checkout_dt else None
+    ci_status = classify_checkin(ci_t, dow)
+    co_status = classify_checkout(co_t, dow) if co_t else "no_checkout"
+
+    # ── Quy tắc "lỗi" ghi đè ────────────────────────────────────────────────
+    # Checkin lỗi: timein > 18:00 → ngày đó = 0 công (dù cho có checkout)
+    if ci_status == "faulty":
+        return {
+            "work_value": 0,
+            "status": "checkin_faulty",
+            "symbol": "0",
+            "is_holiday": False,
+            "holiday_kind": None,
+            "checkin_status": ci_status,
+            "checkout_status": co_status,
+        }
+
+    # Checkout lỗi: timeout < 8:30 → ngày đó = 0 công
+    if co_status == "faulty":
+        return {
+            "work_value": 0,
+            "status": "checkout_faulty",
+            "symbol": "0",
+            "is_holiday": False,
+            "holiday_kind": None,
+            "checkin_status": ci_status,
+            "checkout_status": co_status,
+        }
+
+    # Saturday — always 0.5 if there is any checkin.
+    if dow == 5:
+        return {
+            "work_value": 0.5,
+            "status": "half_day",
+            "symbol": "0.5",
+            "is_holiday": False,
+            "holiday_kind": None,
+            "checkin_status": ci_status,
+            "checkout_status": co_status,
+        }
+
+    # Weekday rules (Mon-Fri)
+    if ci_t <= NOON:
+        # AM shift
+        if co_t is None:
+            # No checkout → still count 1 (forgot checkout). Frontend will
+            # show "No" in the checkout row but work_value stays at 1.
+            work = 1
+            status = "no_checkout"
+        elif co_t < HALF_DAY_PM_BORDER:
+            work = 0.5   # morning only
+            status = "half_day"
+        else:
+            work = 1
+            status = "on_time"
+    else:
+        # PM shift (checkin > 12:00)
+        if co_t is not None and co_t < HALF_DAY_PM_BORDER:
+            work = 0     # PM-loi
+            status = "absent"
+        else:
+            work = 0.5   # afternoon only
+            status = "half_day"
+
+    symbol = "" if work == 0 else ("1" if work == 1 else "0.5")
+    return {
+        "work_value": work,
+        "status": status,
+        "symbol": symbol,
+        "is_holiday": False,
+        "holiday_kind": None,
+        "checkin_status": ci_status,
+        "checkout_status": co_status,
+    }
+
+
+def get_holiday_for(db: Session, employee_id: int, target_date: date) -> Optional[Holiday]:
+    """Return the most specific Holiday for (employee, date).
+
+    Priority: per-employee (scope='employee') first, then 'all'.
+    """
+    emp_row = db.query(Holiday).filter(
+        Holiday.date == target_date,
+        Holiday.scope == "employee",
+        Holiday.employee_id == employee_id,
+    ).first()
+    if emp_row:
+        return emp_row
+    return db.query(Holiday).filter(
+        Holiday.date == target_date,
+        Holiday.scope == "all",
+    ).first()
+
+
 def get_sheet_data(db: Session, year: int, month: int) -> dict:
     """Get attendance data for the pay period (26 prev month -> 25 this month).
 
     Example: month=8, year=2026 -> 2026-07-26 through 2026-08-25.
+
+    Logic: tính công on-the-fly từ time_log + holidays. Bảng `attendance`
+    chỉ dùng để fallback hiển thị giờ checkin/checkout (sẽ đồng bộ với time_log).
     """
     if month == 1:
         period_start = date(year - 1, 12, 26)
@@ -522,32 +722,49 @@ def get_sheet_data(db: Session, year: int, month: int) -> dict:
 
     # Build department buckets.
     dept_buckets = []
-    # 1. Departments with explicit name (sorted by sort_order).
     for dept in departments:
         emps = by_dept.get(dept.id, [])
         if not emps:
             continue
         dept_buckets.append((dept.id, dept.name, emps))
         by_dept.pop(dept.id, None)
-    # 2. Employees without department -> "Chưa phân phòng".
     for dept_id, emps in by_dept.items():
         if emps:
             dept_buckets.append((None, "Chưa phân phòng", emps))
 
-    # Pre-load all attendances for the period.
-    period_attendances = db.query(Attendance).filter(
-        Attendance.date >= period_start,
-        Attendance.date <= period_end
+    # Pre-load all time_log rows for the period (source of truth).
+    tl_rows = db.query(TimeLog).filter(
+        TimeLog.date >= period_start,
+        TimeLog.date <= period_end,
     ).all()
-    att_by_emp_date: dict[tuple[int, date], Attendance] = {
-        (a.employee_id, a.date): a for a in period_attendances
-    }
+    # Build (employee_id, date) -> {"checkin": dt, "checkout": dt}
+    tl_by_emp_date: dict[tuple[int, date], dict] = {}
+    for r in tl_rows:
+        slot = tl_by_emp_date.setdefault((r.employee_id, r.date), {})
+        if r.action == "checkin":
+            if slot.get("checkin") is None or r.time_value < slot["checkin"]:
+                slot["checkin"] = r.time_value
+        elif r.action == "checkout":
+            if slot.get("checkout") is None or r.time_value > slot["checkout"]:
+                slot["checkout"] = r.time_value
+
+    # Pre-load holidays in the period (both scopes).
+    holiday_rows = db.query(Holiday).filter(
+        Holiday.date >= period_start,
+        Holiday.date <= period_end,
+    ).all()
+    # Build (date, employee_id_or_None) -> Holiday. For 'all', employee_id is None.
+    holiday_by_date: dict[date, list[Holiday]] = {}
+    for h in holiday_rows:
+        holiday_by_date.setdefault(h.date, []).append(h)
+
+    today = date.today()
 
     result = {
         "period_start": period_start,
         "period_end": period_end,
         "dates": dates,
-        "weekdays_per_week": 6,  # T2-T6 + sáng T7 = 6 buổi / tuần
+        "weekdays_per_week": 6,
         "departments": [],
     }
 
@@ -557,217 +774,120 @@ def get_sheet_data(db: Session, year: int, month: int) -> dict:
             days_on_time = 0
             days_late = 0
             days_absent = 0
-            half_days = 0     # half-day count (Sat worked + weekday half-day rule)
+            half_days = 0
+            holiday_full = 0   # L/P ghi đè, full công (T2-T6)
+            holiday_half = 0   # L/P ghi đè, nửa công (T7)
             total_late = 0
             total_early = 0
             details = []
 
             for d in dates:
-                dow = d.weekday()  # 0=Mon, 6=Sun
-                att = att_by_emp_date.get((emp.id, d))
+                dow = d.weekday()
+                slot = tl_by_emp_date.get((emp.id, d))
+                checkin_dt = slot["checkin"] if slot else None
+                checkout_dt = slot["checkout"] if slot else None
 
-                late_min = 0
-                early_min = 0
-                status = "weekend"
+                ci_status = None
+                co_status = None
 
-                if dow == 6:  # Sunday
-                    status = "weekend"
+                # Holiday ghi đè.
+                holiday = None
+                for h in holiday_by_date.get(d, []):
+                    if h.scope == "all" or h.employee_id == emp.id:
+                        holiday = h
+                        break
+
+                # Ngày tương lai + hôm nay: để trống (chưa tính).
+                if d > today:
+                    work_value = None
+                    status = "future"
                     symbol = ""
-                elif dow == 5:  # Saturday - always counted as half-day if worked
-                    if att and att.checkin_time:
-                        # Calculate raw late/early minutes for reporting
-                        if att.checkin_time.time() > WEEKDAY_CHECKIN_DEADLINE:
-                            late_min = (att.checkin_time.hour * 60 + att.checkin_time.minute) - (8 * 60 + 30)
-                        else:
-                            late_min = 0
-                        if att.checkout_time and att.checkout_time.time() < SATURDAY_SHIFT_END:
-                            early_min = (SATURDAY_SHIFT_END.hour * 60 + SATURDAY_SHIFT_END.minute) - (att.checkout_time.hour * 60 + att.checkout_time.minute)
-                        else:
-                            early_min = 0
-
-                        # Symbol is always 0.5 for Saturday (policy).
-                        half_days += 1
-                        total_late += late_min
-                        total_early += early_min
-                        symbol = "0.5"
-
-                        # Status: if is_on_time override is set, use it; else compute from time
-                        if att.is_on_time is True:
-                            status = "on_time"
-                            late_min = 0
-                            total_late -= late_min  # reset late minutes on override
-                        elif att.is_on_time is False:
-                            status = "late"
-                        elif late_min > 0:
-                            status = "late"
-                        elif early_min > 0:
-                            status = "early_leave"
-                        else:
-                            status = "on_time"
-                    else:
-                        # T7 không đi làm -> để trống (giống nghỉ)
+                    late_min = 0
+                    early_min = 0
+                    checkin_display = ""
+                    checkout_display = ""
+                elif holiday is not None:
+                    # Áp dụng ngày lễ/phép: T2-T6 = 1 công, T7 = 0.5
+                    if dow == 6:  # CN không tính dù là lễ
+                        work_value = None
                         status = "weekend"
                         symbol = ""
-                else:  # Mon-Fri
-                    if att and att.checkin_time:
-                        # ── Determine shift and compute raw minutes ─────────────────────
-                        # Use stored shift (from checkin) or infer from checkin_time
-                        shift = att.shift or (
-                            "AM" if att.checkin_time.time() <= AM_CHECKIN_LATEST else "PM"
-                        )
-                        am_deadline = get_am_deadline(db, d)
-                        pm_deadline = get_pm_deadline(db, d)
-                        ci_t = att.checkin_time.time()
-                        co_t = att.checkout_time.time() if att.checkout_time else None
-
-                        # Raw late minutes: compare against shift-specific deadline
-                        if shift == "AM":
-                            if ci_t > am_deadline:
-                                raw_late_min = (ci_t.hour * 60 + ci_t.minute) - (am_deadline.hour * 60 + am_deadline.minute)
-                            else:
-                                raw_late_min = 0
-                        else:  # PM
-                            if ci_t > PM_SHIFT_DEADLINE:
-                                raw_late_min = (ci_t.hour * 60 + ci_t.minute) - (PM_SHIFT_DEADLINE.hour * 60 + PM_SHIFT_DEADLINE.minute)
-                            else:
-                                raw_late_min = 0
-
-                        # Raw early minutes: minutes before PM deadline
-                        raw_early_min = att.early_leave_minutes or 0
-
-                        # ── Full-day rule ─────────────────────────────────────────────
-                        if att.is_full_day or (ci_t <= am_deadline and co_t and co_t >= pm_deadline):
-                            status = "on_time"
-                            symbol = "1"
-                            late_min = 0
-                            early_min = 0
-                            if att.is_on_time is not False:
-                                days_on_time += 1
-                            # override still possible
-                        elif att.is_on_time is True:
-                            # Manual: marked "đúng giờ"
-                            status = "on_time"
-                            symbol = "1"
-                            late_min = 0
-                            early_min = 0
-                            days_on_time += 1
-                        elif att.is_on_time is False:
-                            # Manual: marked "đi muộn"
-                            status = "late"
-                            symbol = "1"
-                            late_min = raw_late_min
-                            early_min = 0
-                            days_late += 1
-                            total_late += raw_late_min
-                        else:
-                            # ── No override: apply shift-based rules ────────────────────
-                            if shift == "PM":
-                                # PM checkin (only) → 0.5 công
-                                half_days += 1
-                                late_min = raw_late_min
-                                early_min = raw_early_min
-                                total_late += raw_late_min
-                                total_early += raw_early_min
-                                if late_min > 0 and early_min > 0:
-                                    status = "late_and_early"
-                                elif late_min > 0:
-                                    status = "late"
-                                elif early_min > 0:
-                                    status = "early_leave"
-                                else:
-                                    status = "on_time"
-                                symbol = "0.5"
-                            elif co_t and co_t < WEEKDAY_HALF_DAY_CHECKOUT_THRESHOLD:
-                                # AM checkin + checkout before 13:30 → 0.5 buổi sáng
-                                half_days += 1
-                                late_min = raw_late_min
-                                early_min = 0
-                                total_late += raw_late_min
-                                status = "early_leave" if raw_late_min == 0 else "late"
-                                symbol = "0.5"
-                            elif co_t and co_t < pm_deadline:
-                                # AM checkin + checkout 13:30–pm_deadline → 0.5 công
-                                # Record late AM + early PM minutes
-                                half_days += 1
-                                late_min = raw_late_min
-                                early_min = raw_early_min
-                                total_late += raw_late_min
-                                total_early += raw_early_min
-                                if raw_late_min > 0 and raw_early_min > 0:
-                                    status = "late_and_early"
-                                elif raw_late_min > 0:
-                                    status = "late"
-                                elif raw_early_min > 0:
-                                    status = "early_leave"
-                                else:
-                                    status = "on_time"
-                                symbol = "0.5"
-                            elif raw_late_min > 0:
-                                status = "late"
-                                days_late += 1
-                                late_min = raw_late_min
-                                early_min = 0
-                                total_late += raw_late_min
-                                symbol = "1"
-                            elif raw_early_min > 0:
-                                # AM checkin + checkout after pm_deadline? Not possible unless
-                                # early_leave_minutes is set manually — treat as on_time for 1.0
-                                status = "on_time"
-                                days_on_time += 1
-                                late_min = 0
-                                early_min = 0
-                                symbol = "1"
-                            else:
-                                status = "on_time"
-                                days_on_time += 1
-                                late_min = 0
-                                early_min = 0
-                                symbol = "1"
-
-                        # ── Apply is_early_leave override ─────────────────────────────
-                        if att.is_early_leave is True:
-                            if status == "on_time":
-                                days_on_time -= 1
-                                half_days += 1
-                                status = "early_leave"
-                            elif status == "late":
-                                days_late -= 1
-                                half_days += 1
-                                status = "early_leave"
-                            symbol = "0.5"
-                            total_early += raw_early_min
-                        elif att.is_early_leave is False:
-                            if status == "early_leave":
-                                half_days -= 1
-                                days_on_time += 1
-                                status = "on_time"
-                            symbol = "1"
-
+                    elif dow == 5:
+                        work_value = 0.5
+                        status = "holiday"
+                        symbol = "0.5"
+                        holiday_half += 1
                     else:
-                        status = "absent"
+                        work_value = 1
+                        status = "holiday"
+                        symbol = "1"
+                        holiday_full += 1
+                    late_min = 0
+                    early_min = 0
+                    checkin_display = ""
+                    checkout_display = ""
+                else:
+                    res = compute_work_day(checkin_dt, checkout_dt, d)
+                    work_value = res["work_value"]
+                    status = res["status"]
+                    symbol = res["symbol"]
+                    ci_status = res.get("checkin_status")
+                    co_status = res.get("checkout_status")
+                    late_min = 0
+                    early_min = 0
+                    if checkin_dt is not None:
+                        am_dl = get_am_deadline(db, d)
+                        if checkin_dt.time() > am_dl:
+                            late_min = (checkin_dt.hour * 60 + checkin_dt.minute) - (
+                                am_dl.hour * 60 + am_dl.minute
+                            )
+                        total_late += late_min
+                    if checkout_dt is not None and dow != 6 and dow != 5:
+                        pm_dl = get_pm_deadline(db, d)
+                        if checkout_dt.time() < pm_dl:
+                            early_min = (pm_dl.hour * 60 + pm_dl.minute) - (
+                                checkout_dt.hour * 60 + checkout_dt.minute
+                            )
+                            total_early += early_min
+
+                    checkin_display = (
+                        checkin_dt.strftime("%H:%M") if checkin_dt else ""
+                    )
+                    if checkout_dt is not None:
+                        checkout_display = checkout_dt.strftime("%H:%M")
+                    elif checkin_dt is not None:
+                        checkout_display = "No"
+                    else:
+                        checkout_display = ""
+
+                    if work_value == 1 and late_min == 0:
+                        days_on_time += 1
+                    elif work_value == 1 and late_min > 0:
+                        days_late += 1
+                    elif work_value == 0.5:
+                        half_days += 1
+                    elif work_value == 0:
                         days_absent += 1
-                        symbol = ""
 
                 details.append({
                     "date": d,
                     "day_of_week": dow,
-                    "checkin_time": att.checkin_time if att else None,
-                    "checkout_time": att.checkout_time if att else None,
+                    "checkin_time": checkin_dt if d <= today else None,
+                    "checkout_time": checkout_dt if d <= today else None,
+                    "checkin_display": checkin_display,
+                    "checkout_display": checkout_display,
                     "status": status,
                     "late_minutes": late_min,
                     "early_minutes": early_min,
                     "symbol": symbol,
+                    "work_value": work_value,
+                    "checkin_status": ci_status if d <= today else None,
+                    "checkout_status": co_status if d <= today else None,
                 })
 
-            # Count standard workdays in the period (Mon-Fri only). Used for "Công chuẩn".
             standard_workdays = sum(1 for d in dates if d.weekday() < 5)
+            actual_days = days_on_time + days_late + half_days * 0.5 + holiday_full + holiday_half * 0.5
 
-            # Tổng công thực tế (full + 0.5*half_days). half_days gồm:
-            # - Tất cả T7 có đi làm (luôn = 0.5 công)
-            # - T2-T6 thoả điều kiện nửa công (checkout < 13h30 hoặc checkin > 12h00)
-            actual_days = days_on_time + days_late + half_days * 0.5
-
-            # Sum danh sách các summary fields
             emp_stats.append({
                 "employee_id": emp.id,
                 "employee_code": emp.code,
@@ -776,38 +896,29 @@ def get_sheet_data(db: Session, year: int, month: int) -> dict:
                 "department_name": dept_name,
                 "start_date": emp.start_date,
                 "status_label": emp.status_label,
-                # Basic counters
                 "days_on_time": days_on_time,
                 "days_late": days_late,
                 "days_absent": days_absent,
-                "half_days": half_days,                            # Số ngày tính nửa công
+                "half_days": half_days,
+                "holiday_full_days": holiday_full,
+                "holiday_half_days": holiday_half,
                 "total_late_minutes": total_late,
                 "total_early_minutes": total_early,
-                # Extended summary fields mapped to template columns
-                "standard_workdays": standard_workdays,             # Công chuẩn (T2-T6)
-                "official_days": actual_days,                       # Công TT (tổng công thực tế)
-                "business_trip_days": 0,                            # Công tác (no data)
-                "holiday_days": 0,                                  # Nghỉ lễ
-                "holiday_work_days": 0,                             # Ngày lễ đi làm
-                "paid_leave_days": 0,                               # Nghỉ hưởng lương
-                "maternity_leave_days": 0,                          # Nghỉ chế độ
-                "compensatory_days": 0,                             # Nghỉ bù
-                "office_work_days": 0,                              # Làm việc NVP
-                "unpaid_leave_days": days_absent,                   # Nghỉ phép (best guess)
-                "paid_work_days": actual_days,                      # Công hưởng lương
-                "trial_work_days": (
-                    actual_days
-                    if emp.status_label == "Thử việc" else 0
-                ),
-                "official_work_days": (
-                    actual_days
-                    if emp.status_label == "Chính thức" else 0
-                ),
-                "tts_days": 0,                                      # Công TTS
-                "intern_days": (
-                    actual_days
-                    if emp.status_label == "Học việc" else 0
-                ),
+                "standard_workdays": standard_workdays,
+                "official_days": actual_days,
+                "business_trip_days": 0,
+                "holiday_days": holiday_full + holiday_half,
+                "holiday_work_days": 0,
+                "paid_leave_days": 0,
+                "maternity_leave_days": 0,
+                "compensatory_days": 0,
+                "office_work_days": 0,
+                "unpaid_leave_days": days_absent,
+                "paid_work_days": actual_days,
+                "trial_work_days": actual_days if emp.status_label == "Thử việc" else 0,
+                "official_work_days": actual_days if emp.status_label == "Chính thức" else 0,
+                "tts_days": 0,
+                "intern_days": actual_days if emp.status_label == "Học việc" else 0,
                 "details": details,
             })
 

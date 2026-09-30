@@ -61,7 +61,12 @@ def checkin_endpoint(
             detail=f"Quá nhiều yêu cầu. Thử lại sau {retry_after}s.",
         )
     try:
-        attendance = crud.checkin(db, data.employee_id, data.device_id)
+        attendance = crud.checkin(
+            db,
+            data.employee_id,
+            data.device_id,
+            client_ip=client_ip,
+        )
         return _build_response(db, attendance)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -91,7 +96,12 @@ def checkout_endpoint(
             detail=f"Quá nhiều yêu cầu. Thử lại sau {retry_after}s.",
         )
     try:
-        attendance = crud.checkout(db, data.employee_id, data.device_id)
+        attendance = crud.checkout(
+            db,
+            data.employee_id,
+            data.device_id,
+            client_ip=client_ip,
+        )
         return _build_response(db, attendance)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

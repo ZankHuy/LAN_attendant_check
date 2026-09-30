@@ -198,6 +198,29 @@
                     <input type="date" id="filterDate" onchange="loadAttendance()">
                     <button class="btn btn-primary btn-sm" onclick="loadAttendance()">🔍 Tìm</button>
                     <button class="btn btn-success btn-sm" onclick="openCreateModal()">+ Tạo mới</button>
+                    <button class="btn btn-warning btn-sm" onclick="openTimelogModal()">🕒 Sửa timelog</button>
+                </div>
+
+                <!-- Time-log edit panel -->
+                <div class="panel" id="timelogPanel" style="margin-bottom:16px;">
+                    <h3>🕒 Sửa timelog checkin/checkout</h3>
+                    <p style="font-size:13px;color:#666;margin-bottom:10px;">
+                        Nhập mã NV + ngày cần sửa. Hệ thống sẽ load checkin/checkout hiện tại từ <code>time_log</code>.
+                        Sửa và lưu → các giá trị mới sẽ được dùng để tính công.
+                    </p>
+                    <div class="row">
+                        <input type="text" id="tlEmpCode" placeholder="Mã NV (vd: NV001)" style="width:160px;">
+                        <input type="date" id="tlDate" style="width:160px;">
+                        <button class="btn btn-primary btn-sm" onclick="loadTimelog()">🔍 Load</button>
+                    </div>
+                    <div id="tlCurrent" style="margin:10px 0;font-size:13px;color:#555;"></div>
+                    <div class="row">
+                        <label style="font-size:13px;">Checkin:</label>
+                        <input type="datetime-local" id="tlCheckin" style="width:220px;">
+                        <label style="font-size:13px;">Checkout:</label>
+                        <input type="datetime-local" id="tlCheckout" style="width:220px;">
+                        <button class="btn btn-success btn-sm" onclick="saveTimelog()">💾 Lưu</button>
+                    </div>
                 </div>
 
                 <!-- Shift deadline settings -->
@@ -352,6 +375,90 @@
         if (t) h['X-Hidden-Token'] = t;
         return h;
     }
+    // ── Timelog edit panel ────────────────────────────────────────────────────
+    const TIMELOG_API = '/api/hidden/timelog';
+
+    function openTimelogModal() {
+        // Just scroll into view; the panel is always visible.
+        const p = document.getElementById('timelogPanel');
+        if (p) p.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.getElementById('tlEmpCode').focus();
+    }
+
+    function _toLocalInput(dt) {
+        if (!dt) return '';
+        // dt can be ISO string from server; convert to "YYYY-MM-DDTHH:MM"
+        const d = new Date(dt);
+        if (isNaN(d.getTime())) return '';
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    async function loadTimelog() {
+        const empCode = document.getElementById('tlEmpCode').value.trim();
+        const date = document.getElementById('tlDate').value;
+        if (!empCode || !date) {
+            toast('Nhập mã NV và ngày', 'error');
+            return;
+        }
+        try {
+            const res = await fetch(`${TIMELOG_API}?employee_code=${encodeURIComponent(empCode)}&date=${encodeURIComponent(date)}`, {
+                headers: authHeaders()
+            });
+            if (res.status === 401) { logout(); return; }
+            if (!res.ok) {
+                const d = await res.json().catch(() => ({}));
+                toast(d.detail || 'Lỗi tải timelog', 'error');
+                return;
+            }
+            const row = await res.json();
+            document.getElementById('tlCheckin').value = _toLocalInput(row.checkin_time);
+            document.getElementById('tlCheckout').value = _toLocalInput(row.checkout_time);
+            const ci = row.checkin_time ? new Date(row.checkin_time).toLocaleString('vi-VN') : '—';
+            const co = row.checkout_time ? new Date(row.checkout_time).toLocaleString('vi-VN') : '—';
+            const tag = (b) => b ? ' <span style="color:#856404;font-size:11px;">(đã sửa)</span>' : '';
+            document.getElementById('tlCurrent').innerHTML = `
+                <strong>${row.employee_code} - ${row.employee_name || ''}</strong> · ngày ${row.date}<br>
+                Checkin hiện tại: <code>${ci}</code>${tag(row.checkin_is_manual)} ·
+                Checkout hiện tại: <code>${co}</code>${tag(row.checkout_is_manual)}
+            `;
+        } catch (err) {
+            toast('Lỗi kết nối', 'error');
+        }
+    }
+
+    async function saveTimelog() {
+        const empCode = document.getElementById('tlEmpCode').value.trim();
+        const date = document.getElementById('tlDate').value;
+        const ci = document.getElementById('tlCheckin').value;
+        const co = document.getElementById('tlCheckout').value;
+        if (!empCode || !date) { toast('Nhập mã NV và ngày', 'error'); return; }
+        if (!ci && !co) { toast('Cần ít nhất 1 trong checkin/checkout', 'error'); return; }
+
+        const payload = {
+            employee_code: empCode,
+            date: date,
+            checkin_time: ci ? new Date(ci).toISOString() : null,
+            checkout_time: co ? new Date(co).toISOString() : null,
+        };
+        try {
+            const res = await fetch(`${TIMELOG_API}/update`, {
+                method: 'POST',
+                headers: authHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+                const d = await res.json().catch(() => ({}));
+                toast(d.detail || 'Lỗi lưu', 'error');
+                return;
+            }
+            toast('Đã lưu timelog');
+            loadTimelog();
+        } catch (err) {
+            toast('Lỗi kết nối', 'error');
+        }
+    }
+
     async function checkSession() {
         const t = getToken();
         if (!t || tokenExpired()) {

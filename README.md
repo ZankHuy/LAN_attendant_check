@@ -240,6 +240,36 @@ Tài khoản multi-user với phân quyền.
 | `role` | VARCHAR(50) | Vai trò (admin / edit_attendance) |
 | `created_at` | DATETIME | Ngày tạo |
 
+### 5.7. Bảng `time_log`
+
+| Cột | Kiểu | Mô tả |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `employee_id` | INTEGER FK | Nhân viên |
+| `date` | DATE | Ngày |
+| `action` | VARCHAR(20) | `checkin` / `checkout` |
+| `time_value` | DATETIME | Giờ thực tế |
+| `device_id` | VARCHAR(100) | Thiết bị kiosk |
+| `client_ip` | VARCHAR(50) | IP máy kiosk |
+| `is_manual` | BOOLEAN | `True` nếu admin sửa qua `/hidden` |
+| `actor` | VARCHAR(50) | `kiosk` / `hidden` / `admin` |
+| `created_at` | DATETIME | Thời điểm ghi log |
+
+UNIQUE: `(employee_id, date, action)`.
+
+### 5.8. Bảng `holidays`
+
+| Cột | Kiểu | Mô tả |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `date` | DATE | Ngày lễ / phép |
+| `kind` | VARCHAR(10) | `L` (lễ) / `P` (phép) |
+| `label` | VARCHAR(100) | Nhãn tuỳ chọn |
+| `scope` | VARCHAR(20) | `all` / `employee` |
+| `employee_id` | INTEGER FK | NV cụ thể (chỉ khi scope=`employee`) |
+| `created_at` | DATETIME | |
+| `created_by` | VARCHAR(50) | `admin` / username |
+
 ---
 
 ## 6. API Endpoints
@@ -252,8 +282,16 @@ Tài khoản multi-user với phân quyền.
 | `POST` | `/checkout` | Checkout nhân viên |
 | `GET` | `/today/{device_id}` | Lấy trạng thái hôm nay theo thiết bị |
 | `GET` | `/ban-status/{device_id}` | Kiểm tra trạng thái cấm thiết bị |
-| `GET` | `/settings` | Lấy cấu hình giờ AM/PM |
+| `GET` | `/settings` | Lấu cấu hình giờ AM/PM |
 | `POST` | `/settings` | Cập nhật cấu hình giờ AM/PM |
+
+### 6.1.1 Holidays (`/api/holidays`) — admin-only
+
+| Method | Endpoint | Mô tả |
+|---|---|---|
+| `GET` | `/?year=&month=` | Danh sách ngày lễ / nghỉ phép trong kỳ |
+| `POST` | `/` | Thêm ngày lễ/phép (scope=all hoặc scope=employee) |
+| `DELETE` | `/{id}` | Xóa ngày lễ/phép |
 
 ### 6.2. Employees (`/api/employees`)
 
@@ -299,6 +337,13 @@ Tài khoản multi-user với phân quyền.
 | `PATCH` | `/{id}` | Sửa cờ is_on_time / is_early_leave | edit_attendance |
 | `DELETE` | `/{id}` | Xóa bản ghi | edit_attendance |
 
+### 6.7. Hidden Timelog (`/api/hidden/timelog`)
+
+| Method | Endpoint | Mô tả | Auth |
+|---|---|---|---|
+| `GET` | `/?employee_code=&date=` | Lấy checkin/checkout hiện tại | edit_attendance |
+| `POST` | `/update` | Sửa checkin/checkout (ghi vào `time_log`) | edit_attendance |
+
 ---
 
 ## 7. Tính năng chấm công
@@ -333,6 +378,20 @@ Nhân viên khác dùng cùng thiết bị → BỊ TỪ CHỐI
 Hết thời gian cấm → Thiết bị tự động được phép dùng lại
 ```
 
+### 7.4. Hiển thị bảng công (`/admin`) — 3 dòng / NV / ngày
+
+Mỗi nhân viên hiển thị **3 dòng liên tiếp** trong bảng:
+
+| Dòng | Nội dung |
+|---|---|
+| 1 | Số công (1 / 0.5 / 0 / "-") |
+| 2 | Giờ checkin (HH:MM hoặc "-" nếu không có) |
+| 3 | Giờ checkout (HH:MM hoặc "No" nếu có checkin mà quên checkout) |
+
+Quy tắc hiển thị theo thời gian:
+- Ngày tương lai + hôm nay: tất cả 3 dòng để `-` (chưa tính).
+- Ngày quá khứ: dùng `time_log` (lưu qua checkin/checkout hoặc admin sửa qua `/hidden`) để hiển thị số công + giờ.
+
 - Mỗi hành động (checkin/checkout) có cấm riêng
 - Có thể chỉnh thời gian cấm trong `/admin`
 - Device ID = fingerprint của trình duyệt (localStorage)
@@ -356,15 +415,17 @@ Dùng để chỉnh sửa thủ công các bản ghi chấm công:
 - **Kết thúc:** Ngày 25 tháng hiện tại
 - **Ví dụ:** Kỳ 08/2026 = 26/07/2026 → 25/08/2026
 
-### 8.2. Quy tắc tính công (Thứ 2 - Thứ 6)
+### 8.2. Quy tắc tính công (Thứ 2 - Thứ 6) — **phiên bản mới 2026-09**
 
-| Checkin | Checkout | Công | Ghi nhận |
+> Tính công on-the-fly từ bảng `time_log`. **Checkout không bắt buộc** — chỉ cần checkin là có công. Nếu quên checkout thì ô checkout hiển thị `No` nhưng vẫn tính 1 công cho ngày đó (theo rule AM/PM).
+
+| Checkin | Checkout | Công | Ghi chú |
 |---|---|---|---|
-| `<= AM deadline` | `>= PM deadline` | **1.0** | Full day, đúng giờ |
-| `<= AM deadline` | `>= 13:30` | **0.5** | Muộn AM (phút) + Về sớm PM (phút) |
-| `<= AM deadline` | `< 13:30` | **0.5** | Buổi sáng |
-| `> 12:00` (PM) | Bất kỳ | **0.5** | Muộn PM (phút) + Về sớm (phút) |
-| Không checkin | — | **0** | Vắng |
+| Không checkin | — | **0** | Nghỉ |
+| `> 12:00` | `< 13:30` | **0** | PM lỗi (chỉ làm 30 phút) |
+| `<= 12:00` | `< 13:30` | **0.5** | Buổi sáng |
+| `> 12:00` | bất kỳ / không checkout | **0.5** | Buổi chiều |
+| `<= 12:00` | `>= 13:30` | **1** | Full day |
 
 ### 8.3. Quy tắc tính công (Thứ 7)
 
@@ -380,8 +441,59 @@ Dùng để chỉnh sửa thủ công các bản ghi chấm công:
 ### 8.5. Đi muộn & Về sớm
 
 **Đi muộn AM:** `max(0, checkin - AM_deadline)` phút
-**Đi muộn PM:** `max(0, checkin - 13:30)` phút
 **Về sớm:** `max(0, PM_deadline - checkout)` phút
+
+### 8.6. Highlight màu trên bảng công (checkin/checkout)
+
+Mỗi ô checkin/checkout được tô màu theo rule (dùng để dễ phát hiện sai sót):
+
+| Trạng thái | Quy tắc | Màu hiển thị |
+|---|---|---|
+| **Checkin đúng giờ** | `timein < 8:30` **HOẶC** `12:00 < timein < 13:30` | Xanh lá nhạt (`#d4edda`) |
+| **Checkin muộn** | `8:30 ≤ timein ≤ 12:00` (muộn AM) **HOẶC** `13:30 ≤ timein ≤ 18:00` (muộn PM) | Vàng (`#fff3cd`) |
+| **Checkin lỗi** | `timein > 18:00` → **0 công** | Đỏ (`#f8d7da`) |
+| **Checkout đúng giờ** | `12:00 < timeout < 13:30` **HOẶC** `timeout ≥ 18:00` | Xanh lá nhạt |
+| **Checkout về sớm** | các trường hợp còn lại | Vàng |
+| **Checkout lỗi** | `timeout < 8:30` → **0 công** | Đỏ |
+
+**Lưu ý:** Checkin/checkout lỗi có hiệu lực **ghi đè**: ngày đó tính 0 công dù các rule khác có ra sao. Rule áp dụng cho cả T2-T7 (CN không có).
+
+---
+
+## 8.7. Bảng `time_log` (mới)
+
+Mỗi lượt checkin/checkout tạo **1 row** trong bảng `time_log` (source of truth). Bảng `attendance` chỉ là summary view được tính lại (MIN/MAX) mỗi khi có action.
+
+Cấu trúc `time_log`:
+
+| Cột | Mô tả |
+|---|---|
+| `employee_id` | NV |
+| `date` | Ngày |
+| `action` | `checkin` / `checkout` |
+| `time_value` | Giờ thực tế |
+| `device_id` | Thiết bị kiosk |
+| `is_manual` | `True` nếu admin sửa qua `/hidden` |
+| `actor` | `kiosk` / `hidden` / `admin` |
+
+UNIQUE constraint: `(employee_id, date, action)` — mỗi NV mỗi ngày chỉ có 1 row checkin + 1 row checkout. Admin sửa qua endpoint `/api/hidden/timelog/update` sẽ ghi đè.
+
+## 8.8. Bảng `holidays` (nghỉ lễ / nghỉ phép)
+
+Admin thêm ngày lễ (L) hoặc nghỉ phép (P) từ `/admin` → panel "📅 Ngày lễ/Phép":
+
+- **scope = all**: áp dụng cho tất cả NV trong ngày đó.
+- **scope = employee**: áp dụng cho 1 NV cụ thể.
+
+Quy tắc công khi rơi vào ngày lễ/phép:
+
+| Thứ | Công |
+|---|---|
+| T2 - T6 | **1** |
+| T7 | **0.5** |
+| CN | không tính |
+
+Khi admin xóa holiday: ngày đó được tính lại theo logic chấm công thông thường (on-the-fly, tự động cập nhật khi FE pull).
 
 ---
 

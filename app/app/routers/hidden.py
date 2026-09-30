@@ -19,7 +19,7 @@ import logging
 import os
 import secrets
 import time
-from datetime import date, datetime, time
+from datetime import date, datetime, time as dt_time
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, status, Header, Query, Request, Response
@@ -27,8 +27,8 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app import crud, ratelimit
-from app.models import Attendance
+from app import crud, ratelimit, log_timelog
+from app.models import Attendance, TimeLog
 from app.audit import log_action
 
 logger = logging.getLogger("checknv.hidden")
@@ -333,8 +333,8 @@ def put_attendance(
         is_full_day = False
         early_leave_minutes = None
     elif dow == 5:  # Saturday
-        is_on_time = (ci is not None and ci <= time(8, 30)) if ci else None
-        is_early_leave = (co is not None and co < time(12, 0)) if co else None
+        is_on_time = (ci is not None and ci <= dt_time(8, 30)) if ci else None
+        is_early_leave = (co is not None and co < dt_time(12, 0)) if co else None
         is_full_day = False
         early_leave_minutes = None
         if is_early_leave and co:
@@ -450,6 +450,141 @@ def delete_attendance(
     return {"message": f"Đã xóa bản ghi chấm công id={attendance_id}"}
 
 
+# ── timelog edit endpoints ─────────────────────────────────────────────────
+# Admin dùng để sửa giờ checkin/checkout trong quá khứ. Thay vì tạo bản ghi
+# attendance mới, endpoint này ghi đè vào time_log (source of truth) và để
+# helper `_upsert_attendance` đồng bộ lại bảng summary.
+
+class TimeLogRead(BaseModel):
+    employee_id: int
+    employee_code: str
+    employee_name: Optional[str]
+    date: date
+    checkin_time: Optional[datetime] = None
+    checkout_time: Optional[datetime] = None
+    checkin_is_manual: bool = False
+    checkout_is_manual: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class TimeLogUpdate(BaseModel):
+    employee_code: str
+    date: date
+    checkin_time: Optional[datetime] = None
+    checkout_time: Optional[datetime] = None
+
+    @field_validator("checkin_time", "checkout_time", mode="before")
+    @classmethod
+    def _empty_to_none(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
+
+
+timelog_router = APIRouter(prefix="/timelog", tags=["hidden"])
+
+
+@timelog_router.get("", response_model=TimeLogRead)
+def get_timelog(
+    employee_code: str = Query(...),
+    date: str = Query(...),
+    db: Session = Depends(get_db),
+    token: str = Depends(require_hidden_token),
+):
+    emp = db.query(crud.Employee).filter(
+        crud.Employee.code == employee_code.strip()
+    ).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy NV mã '{employee_code}'")
+    try:
+        target = date.fromisoformat(date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="date phải có dạng YYYY-MM-DD")
+
+    checkin_t, checkout_t = log_timelog.get_action_times(db, emp.id, target)
+    ci_row = db.query(TimeLog).filter(
+        TimeLog.employee_id == emp.id, TimeLog.date == target,
+        TimeLog.action == "checkin",
+    ).first()
+    co_row = db.query(TimeLog).filter(
+        TimeLog.employee_id == emp.id, TimeLog.date == target,
+        TimeLog.action == "checkout",
+    ).first()
+    return TimeLogRead(
+        employee_id=emp.id,
+        employee_code=emp.code,
+        employee_name=emp.name,
+        date=target,
+        checkin_time=checkin_t,
+        checkout_time=checkout_t,
+        checkin_is_manual=bool(ci_row and ci_row.is_manual),
+        checkout_is_manual=bool(co_row and co_row.is_manual),
+    )
+
+
+@timelog_router.post("/update", response_model=TimeLogRead)
+def update_timelog(
+    payload: TimeLogUpdate,
+    db: Session = Depends(get_db),
+    token: str = Depends(require_hidden_token),
+):
+    emp = db.query(crud.Employee).filter(
+        crud.Employee.code == payload.employee_code.strip()
+    ).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy NV mã '{payload.employee_code}'")
+    if payload.checkin_time is None and payload.checkout_time is None:
+        raise HTTPException(status_code=400, detail="Phải cung cấp ít nhất 1 trong checkin_time / checkout_time")
+
+    before = log_timelog.get_action_times(db, emp.id, payload.date)
+    log_timelog.replace_times(
+        db,
+        employee_id=emp.id,
+        target_date=payload.date,
+        checkin_time=payload.checkin_time,
+        checkout_time=payload.checkout_time,
+        actor="hidden",
+    )
+    db.commit()
+
+    log_action(
+        db, actor="hidden", action="update_timelog", entity_type="attendance",
+        entity_id=emp.id,
+        detail={
+            "employee_code": emp.code,
+            "date": str(payload.date),
+            "before": {"checkin": str(before[0]), "checkout": str(before[1])},
+            "after": {
+                "checkin": str(payload.checkin_time),
+                "checkout": str(payload.checkout_time),
+            },
+        },
+    )
+
+    checkin_t, checkout_t = log_timelog.get_action_times(db, emp.id, payload.date)
+    ci_row = db.query(TimeLog).filter(
+        TimeLog.employee_id == emp.id, TimeLog.date == payload.date,
+        TimeLog.action == "checkin",
+    ).first()
+    co_row = db.query(TimeLog).filter(
+        TimeLog.employee_id == emp.id, TimeLog.date == payload.date,
+        TimeLog.action == "checkout",
+    ).first()
+    return TimeLogRead(
+        employee_id=emp.id,
+        employee_code=emp.code,
+        employee_name=emp.name,
+        date=payload.date,
+        checkin_time=checkin_t,
+        checkout_time=checkout_t,
+        checkin_is_manual=bool(ci_row and ci_row.is_manual),
+        checkout_is_manual=bool(co_row and co_row.is_manual),
+    )
+
+
 # Mount the attendance router under /api/hidden. Endpoints become
 # /api/hidden/attendance, /api/hidden/attendance/{id} etc.
 router.include_router(att_router)
+router.include_router(timelog_router)
