@@ -17,11 +17,12 @@ services:
       # Override the Excel export template filename (must live under ./resorce/).
       # Default: template.xlsx
       # - EXPORT_TEMPLATE_FILE=your_template.xlsx
-      # Hidden management page — set both to enable.
+      # ── Hidden management page ──────────────────────────────────────────
       # URL the operator visits (default /hidden).
       # - HIDDEN_URL_PATH=hidden
-      # Password required to access the page (no value = /api/hidden/* returns 404).
-      # - HIDDEN_PASSWORD=changeme
+      # Password required to access /hidden. No value → /api/hidden/* = 404.
+      # Default: 123456 (set this to your own strong password in production!).
+      - HIDDEN_PASSWORD=123456
 
     healthcheck:
       # Uses the /health endpoint added in main.py. Container is "healthy"
