@@ -13,7 +13,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # COPY app/app into /app/app — NOT `COPY app/app/ ./app/` (which would
 # flatten the package and produce /app/main.py with no /app/app/ dir).
 COPY app/app /app/app
-COPY static/ /app/static
+# Static HTML files actually live at <repo>/static/static/* (one nesting
+# level deep). main.py opens them as `static/index.html` (relative to
+# WORKDIR=/app), so we copy the inner folder up one level.
+COPY static/static /app/static
 
 # Create persistent data + resource directories. The data folder holds the
 # SQLite DB and is mounted at runtime. The resorce folder is also mounted at
