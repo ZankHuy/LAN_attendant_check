@@ -3,893 +3,343 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hidden Attendance Manager</title>
+    <title>Hidden — Sửa giờ chấm công</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #f0f2f5;
-            min-height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Tahoma, sans-serif;
+            background: #f5f6f8;
+            color: #222;
+            padding: 24px;
         }
+        h1 { font-size: 18px; margin-bottom: 16px; color: #333; }
+        h1 .right { float: right; font-size: 13px; font-weight: 400; color: #666; }
 
-        /* Login */
-        .login-required { display: flex; justify-content: center; align-items: center; height: 90vh; }
-        .login-box {
-            background: white;
-            padding: 40px;
-            border-radius: 12px;
-            width: 380px;
-            text-align: center;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
-        }
-        .login-box .lock-icon { font-size: 48px; margin-bottom: 16px; }
-        .login-box h2 { margin-bottom: 20px; color: #333; }
-        .login-box input {
-            width: 100%; padding: 12px 14px;
-            border: 2px solid #ddd; border-radius: 8px;
-            font-size: 15px; margin-bottom: 12px; outline: none;
-        }
-        .login-box input:focus { border-color: #667eea; }
-        .login-box .btn {
-            width: 100%; padding: 13px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; border: none; border-radius: 8px;
-            font-size: 16px; cursor: pointer; font-weight: 600;
-        }
-        .login-box .btn:hover { opacity: 0.9; }
-        .login-error { color: #dc3545; margin-top: 10px; font-size: 14px; display: none; }
-        .login-warning { background: #fff3cd; color: #856404; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; text-align: left; }
+        /* ── Login ── */
+        #login { max-width: 320px; margin: 80px auto; background: white;
+                padding: 28px; border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+        #login input { width: 100%; padding: 10px 12px; border: 1px solid #ccc;
+                       border-radius: 6px; margin: 10px 0; font-size: 14px; }
+        #login button { width: 100%; padding: 11px; background: #3b82f6; color: white;
+                       border: none; border-radius: 6px; font-size: 15px; cursor: pointer; }
+        #login button:hover { background: #2563eb; }
+        #login .err { color: #dc2626; font-size: 13px; min-height: 16px; }
 
-        /* Header */
-        .header {
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: white;
-            padding: 12px 28px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .header h1 { font-size: 20px; }
-        .header-right { display: flex; gap: 10px; align-items: center; }
-        .btn {
-            padding: 7px 14px; border: none; border-radius: 6px;
-            cursor: pointer; font-size: 14px; transition: opacity 0.2s;
-        }
-        .btn:hover { opacity: 0.85; }
-        .btn-primary { background: #667eea; color: white; }
-        .btn-secondary { background: rgba(255,255,255,0.15); color: white; }
-        .btn-danger { background: #dc3545; color: white; }
-        .btn-success { background: #28a745; color: white; }
-        .btn-warning { background: #ffc107; color: #333; }
-        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        /* ── Main ── */
+        #main { display: none; max-width: 1100px; margin: 0 auto; }
+        .topbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+        .topbar input[type="text"] { padding: 7px 10px; border: 1px solid #d1d5db;
+                                     border-radius: 6px; font-size: 14px; flex: 1; max-width: 280px; }
+        .topbar button { padding: 7px 12px; border: 1px solid #d1d5db; background: white;
+                         border-radius: 6px; font-size: 13px; cursor: pointer; }
+        .topbar button.primary { background: #3b82f6; color: white; border-color: #3b82f6; }
+        .topbar .logout { margin-left: auto; }
 
-        /* Container */
-        .container { padding: 20px 28px; max-width: 1200px; margin: 0 auto; }
+        /* ── Table ── */
+        table { width: 100%; border-collapse: collapse; background: white;
+                border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+        th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #e5e7eb;
+                 font-size: 14px; }
+        th { background: #f9fafb; font-weight: 600; color: #4b5563;
+             font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+        tr:hover td { background: #f9fafb; }
+        td.center, th.center { text-align: center; }
+        td.mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
+        td input[type="time"] { padding: 4px 6px; border: 1px solid #d1d5db;
+                                border-radius: 4px; font-size: 13px; width: 110px; }
+        td .clear { background: none; border: none; color: #9ca3af; cursor: pointer;
+                    font-size: 16px; margin-left: 4px; padding: 0 4px; }
+        td .clear:hover { color: #dc2626; }
+        td button.save { padding: 5px 10px; background: #10b981; color: white;
+                         border: none; border-radius: 4px; font-size: 13px;
+                         cursor: pointer; }
+        td button.save:hover { background: #059669; }
+        td button.save:disabled { background: #d1d5db; cursor: not-allowed; }
+        .row-saved { background: #ecfdf5 !important; transition: background .5s; }
+        .row-error { background: #fef2f2 !important; }
+        .empty { padding: 40px; text-align: center; color: #9ca3af; }
 
-        /* Toolbar */
-        .toolbar {
-            background: white; border-radius: 8px; padding: 14px 18px;
-            margin-bottom: 16px; display: flex; gap: 12px; align-items: center;
-            flex-wrap: wrap;
-        }
-        .toolbar label { font-size: 14px; font-weight: 500; color: #555; }
-        select, input[type="text"], input[type="number"], input[type="date"] {
-            padding: 7px 11px; border: 1px solid #ddd;
-            border-radius: 6px; font-size: 14px;
-        }
-
-        /* Panel */
-        .panel {
-            background: white; border-radius: 8px;
-            padding: 18px 20px; margin-bottom: 16px;
-        }
-        .panel h3 { margin-bottom: 14px; color: #333; font-size: 16px; }
-        .panel .row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
-        .panel .form-note { font-size: 12px; color: #888; margin-top: 6px; }
-
-        /* Stats row */
-        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
-        .stat-card { background: white; border-radius: 8px; padding: 16px; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
-        .stat-card h4 { font-size: 12px; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .stat-card .val { font-size: 24px; font-weight: 700; color: #333; }
-        .stat-card .val.ok { color: #28a745; }
-        .stat-card .val.warn { color: #ffc107; }
-        .stat-card .val.err { color: #dc3545; }
-
-        /* Table */
-        .sheet-container { background: white; border-radius: 8px; overflow-x: auto; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
-        table { width: 100%; border-collapse: collapse; min-width: 900px; }
-        th, td { border: 1px solid #e9ecef; padding: 8px 10px; text-align: center; font-size: 13px; }
-        th { background: #f8f9fa; font-weight: 600; color: #495057; position: sticky; top: 0; z-index: 5; }
-        .th-id { min-width: 50px; }
-        .th-name { min-width: 160px; text-align: left !important; }
-        .th-date { min-width: 100px; }
-        .th-checkin { min-width: 140px; }
-        .th-checkout { min-width: 140px; }
-        .th-flags { min-width: 200px; }
-        .th-actions { min-width: 120px; }
-        tr:nth-child(even) td { background: #fafafa; }
-
-        /* Checkbox flags */
-        .flag-cell { display: flex; gap: 14px; justify-content: center; align-items: center; }
-        .flag-label { display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 13px; }
-        .flag-label input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #667eea; }
-
-        /* Status badge */
-        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
-        .badge-on { background: #d4edda; color: #155724; }
-        .badge-early { background: #ffe69c; color: #856404; }
-        .badge-both { background: #cce5ff; color: #004085; }
-        .badge-none { background: #f8d7da; color: #721c24; }
-
-        /* Toast */
-        .toast {
-            position: fixed; top: 20px; right: 20px;
-            padding: 12px 18px; border-radius: 8px;
-            background: #333; color: white; z-index: 1000;
-            display: none; font-size: 14px;
-        }
-        .toast.success { background: #28a745; }
-        .toast.error { background: #dc3545; }
-        .toast.warn { background: #ffc107; color: #333; }
-
-        /* Modal */
-        .modal-overlay {
-            position: fixed; inset: 0; background: rgba(0,0,0,0.45);
-            display: none; align-items: center; justify-content: center; z-index: 999;
-        }
-        .modal-overlay.show { display: flex; }
-        .modal { background: white; padding: 24px; border-radius: 10px; width: 90%; max-width: 480px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
-        .modal h3 { margin-bottom: 18px; color: #333; }
-        .modal .form-row { margin-bottom: 14px; }
-        .modal label { display: block; font-size: 13px; color: #555; margin-bottom: 4px; font-weight: 500; }
-        .modal input, .modal select {
-            width: 100%; padding: 9px 11px;
-            border: 1px solid #ddd; border-radius: 6px; font-size: 14px;
-        }
-        .modal input[readonly] { background: #f5f5f5; color: #777; }
-        .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
-        .modal .btn-cancel { background: #e9ecef; color: #333; }
-        .modal .btn-save { background: #667eea; color: white; }
-        .modal .btn-delete { background: #dc3545; color: white; }
-
-        /* Pagination */
-        .pagination { display: flex; gap: 6px; justify-content: center; margin-top: 14px; }
-        .page-btn { padding: 5px 12px; border: 1px solid #ddd; border-radius: 5px; background: white; cursor: pointer; font-size: 13px; }
-        .page-btn.active { background: #667eea; color: white; border-color: #667eea; }
-        .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-        /* Empty state */
-        .empty-state { text-align: center; padding: 40px; color: #999; font-size: 15px; }
+        /* ── Toast ── */
+        #toast { position: fixed; bottom: 20px; right: 20px; padding: 10px 16px;
+                 border-radius: 6px; background: #1f2937; color: white; font-size: 13px;
+                 display: none; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+        #toast.err { background: #dc2626; }
+        #toast.ok { background: #10b981; }
     </style>
 </head>
 <body>
-    <div id="app">
-        <!-- Login page -->
-        <div id="loginPage" class="login-required" style="display:none;">
-            <div class="login-box">
-                <div class="lock-icon">🔒</div>
-                <h2>Hidden Attendance</h2>
-                <div class="login-warning">
-                    ⚠️ Truy cập bị giới hạn. Cần mật khẩu (đặt trong biến môi trường <code>HIDDEN_PASSWORD</code>).
-                </div>
-                <input type="password" id="password" placeholder="Mật khẩu" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()">
-                <button class="btn" onclick="login()">Đăng nhập</button>
-                <div class="login-error" id="loginError">Sai mật khẩu</div>
-            </div>
-        </div>
+    <h1 style="display: none;" id="pageTitle">Sửa giờ chấm công</h1>
 
-        <!-- Main app -->
-        <div id="mainApp" style="display:none;">
-            <div class="header">
-                <h1>🔧 Hidden Attendance Manager</h1>
-                <div class="header-right">
-                    <span style="font-size:13px;opacity:0.8;" id="userInfo"></span>
-                    <button class="btn btn-secondary btn-sm" onclick="logout()">Đăng xuất</button>
-                </div>
-            </div>
-
-            <div class="container">
-                <!-- Toolbar -->
-                <div class="toolbar">
-                    <label>Tìm kiếm:</label>
-                    <input type="number" id="filterEmpId" placeholder="Mã NV" style="width:100px;"
-                        onkeydown="if(event.key==='Enter')loadAttendance()">
-                    <input type="date" id="filterDate" onchange="loadAttendance()">
-                    <button class="btn btn-primary btn-sm" onclick="loadAttendance()">🔍 Tìm</button>
-                    <button class="btn btn-success btn-sm" onclick="openCreateModal()">+ Tạo mới</button>
-                    <button class="btn btn-warning btn-sm" onclick="openTimelogModal()">🕒 Sửa timelog</button>
-                </div>
-
-                <!-- Time-log edit panel -->
-                <div class="panel" id="timelogPanel" style="margin-bottom:16px;">
-                    <h3>🕒 Sửa timelog checkin/checkout</h3>
-                    <p style="font-size:13px;color:#666;margin-bottom:10px;">
-                        Nhập mã NV + ngày cần sửa. Hệ thống sẽ load checkin/checkout hiện tại từ <code>time_log</code>.
-                        Sửa và lưu → các giá trị mới sẽ được dùng để tính công.
-                    </p>
-                    <div class="row">
-                        <input type="text" id="tlEmpCode" placeholder="Mã NV (vd: NV001)" style="width:160px;">
-                        <input type="date" id="tlDate" style="width:160px;">
-                        <button class="btn btn-primary btn-sm" onclick="loadTimelog()">🔍 Load</button>
-                    </div>
-                    <div id="tlCurrent" style="margin:10px 0;font-size:13px;color:#555;"></div>
-                    <div class="row">
-                        <label style="font-size:13px;">Checkin:</label>
-                        <input type="datetime-local" id="tlCheckin" style="width:220px;">
-                        <label style="font-size:13px;">Checkout:</label>
-                        <input type="datetime-local" id="tlCheckout" style="width:220px;">
-                        <button class="btn btn-success btn-sm" onclick="saveTimelog()">💾 Lưu</button>
-                    </div>
-                </div>
-
-                <!-- Shift deadline settings -->
-                <div class="panel" id="settingsPanel" style="margin-bottom:16px;">
-                    <h3>⚙️ Cấu hình giờ checkin/checkout</h3>
-                    <p style="font-size:13px; color:#666; margin-bottom:12px;">
-                        Giờ checkin AM mặc định: <strong>08:30</strong> · Giờ checkout PM mặc định: <strong>18:00</strong><br>
-                        Chỉnh giờ → áp dụng cho <strong>các ngày từ hôm nay trở đi</strong>. Các ngày trước giữ nguyên.
-                    </p>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:10px;">
-                        <div>
-                            <label style="font-size:13px; font-weight:500; color:#555;">Giờ checkin AM (đi muộn tính từ giờ này)</label>
-                            <input type="time" id="am_checkin_deadline" value="08:30" style="width:100%;">
-                            <p id="am_deadline_info" style="font-size:12px; color:#888; margin-top:4px;"></p>
-                        </div>
-                        <div>
-                            <label style="font-size:13px; font-weight:500; color:#555;">Giờ checkout PM (về sớm tính từ giờ này)</label>
-                            <input type="time" id="pm_checkout_deadline" value="18:00" style="width:100%;">
-                            <p id="pm_deadline_info" style="font-size:12px; color:#888; margin-top:4px;"></p>
-                        </div>
-                    </div>
-                    <p id="setting_status" style="color:#28a745; font-size:13px; display:none; margin-bottom:8px;"></p>
-                    <button class="btn btn-primary btn-sm" onclick="save_settings()">💾 Lưu cấu hình giờ</button>
-                </div>
-
-                <!-- Stats -->
-                <div class="stats" id="stats"></div>
-
-                <!-- Table -->
-                <div class="sheet-container">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th class="th-id">ID</th>
-                                <th class="th-name">Nhân viên</th>
-                                <th class="th-date">Ngày</th>
-                                <th class="th-checkin">Checkin</th>
-                                <th class="th-checkout">Checkout</th>
-                                <th class="th-flags">Ca</th>
-                                <th class="th-flags">Đúng giờ</th>
-                                <th class="th-flags">Về sớm</th>
-                                <th class="th-actions">Thao tác</th>
-                            </tr>
-                        </thead>
-                        <tbody id="attendanceBody"></tbody>
-                    </table>
-                </div>
-
-                <div class="pagination" id="pagination"></div>
-
-                <div id="emptyState" class="empty-state" style="display:none;">Không có bản ghi nào.</div>
-            </div>
-        </div>
+    <!-- Login -->
+    <div id="login">
+        <h2 style="margin-bottom: 14px; font-size: 18px;">🔒 Đăng nhập</h2>
+        <input type="password" id="password" placeholder="Mật khẩu"
+               onkeydown="if(event.key==='Enter')login()">
+        <button onclick="login()">Đăng nhập</button>
+        <div class="err" id="loginErr"></div>
     </div>
 
-    <!-- Toast -->
-    <div id="toast" class="toast"></div>
-
-    <!-- Edit modal -->
-    <div class="modal-overlay" id="editModal" onclick="if(event.target===this)closeEditModal()">
-        <div class="modal">
-            <h3>✏ Sửa cờ chấm công</h3>
-            <input type="hidden" id="editAttId">
-            <div class="form-row">
-                <label>Nhân viên</label>
-                <input type="text" id="editEmpName" readonly>
-            </div>
-            <div class="form-row">
-                <label>Ngày</label>
-                <input type="date" id="editAttDate" readonly>
-            </div>
-            <div class="form-row" style="display:flex;gap:24px;align-items:center;">
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:15px;">
-                    <input type="checkbox" id="editIsOnTime" style="width:18px;height:18px;accent-color:#667eea;">
-                    Đi đúng giờ
-                </label>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:15px;">
-                    <input type="checkbox" id="editIsEarlyLeave" style="width:18px;height:18px;accent-color:#667eea;">
-                    Về sớm
-                </label>
-            </div>
-            <div class="modal-actions">
-                <button class="btn btn-cancel" onclick="closeEditModal()">Huỷ</button>
-                <button class="btn btn-save" onclick="saveEdit()">💾 Lưu</button>
-            </div>
+    <!-- Main -->
+    <div id="main">
+        <div class="topbar">
+            <input type="text" id="filter" placeholder="🔍 Lọc theo mã NV hoặc tên..."
+                   oninput="applyFilter()">
+            <button onclick="loadList()">↻ Tải lại</button>
+            <button class="logout" onclick="logout()">Đăng xuất</button>
         </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 50px;" class="center">STT</th>
+                    <th style="width: 90px;">Mã NV</th>
+                    <th>Họ tên</th>
+                    <th style="width: 110px;" class="center">Ngày</th>
+                    <th style="width: 140px;" class="center">Checkin</th>
+                    <th style="width: 140px;" class="center">Checkout</th>
+                    <th style="width: 90px;" class="center">Lưu</th>
+                </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+        </table>
+        <div class="empty" id="empty" style="display: none;">Không có bản ghi nào.</div>
     </div>
 
-    <!-- Create modal -->
-    <div class="modal-overlay" id="createModal" onclick="if(event.target===this)closeCreateModal()">
-        <div class="modal">
-            <h3>➕ Tạo bản ghi chấm công</h3>
-            <div class="form-row">
-                <label>Mã nhân viên *</label>
-                <input type="text" id="createEmpCode" placeholder="VD: NV001" autocomplete="off">
-            </div>
-            <div class="form-row">
-                <label>Ngày *</label>
-                <input type="date" id="createDate">
-            </div>
-            <div class="form-row">
-                <label>Checkin</label>
-                <input type="time" id="createCheckin" oninput="updateCreatePreview()" placeholder="HH:MM">
-            </div>
-            <div class="form-row">
-                <label>Checkout</label>
-                <input type="time" id="createCheckout" oninput="updateCreatePreview()" placeholder="HH:MM">
-            </div>
-            <p id="createPreview" style="margin:6px 0 0;font-size:13px;color:#667eea;min-height:18px;"></p>
-            <div class="modal-actions">
-                <button class="btn btn-cancel" onclick="closeCreateModal()">Huỷ</button>
-                <button class="btn btn-save" onclick="saveCreate()">➕ Tạo</button>
-            </div>
-        </div>
-    </div>
+    <div id="toast"></div>
 
     <script>
-    const API = '/api/hidden/attendance';
-    const LOGIN_API = '/api/hidden/login';
+    const API_LIST = '/api/hidden/attendance';
+    const API_LOGIN = '/api/hidden/login';
     const TOKEN_KEY = 'hidden_token';
     const TOKEN_EXP_KEY = 'hidden_token_exp';
-    let currentRows = [];
-    let page = 0;
-    let totalRows = 0;
-    const PAGE_SIZE = 50;
+    let rows = [];   // last fetched list
+    let filter = '';
 
-    // ── Auth (token-based, stored in sessionStorage — cleared when tab closes) ──
-    function getToken() {
-        return sessionStorage.getItem(TOKEN_KEY) || '';
+    // ── Auth ────────────────────────────────────────────────────────────────
+    function getToken() { return sessionStorage.getItem(TOKEN_KEY) || ''; }
+    function saveToken(t, exp) {
+        sessionStorage.setItem(TOKEN_KEY, t);
+        sessionStorage.setItem(TOKEN_EXP_KEY, String(Date.now() + exp * 1000));
     }
-
-    function saveToken(token, expiresIn) {
-        // expiresIn is seconds; we store an absolute expiry epoch ms.
-        const expMs = Date.now() + (expiresIn * 1000);
-        sessionStorage.setItem(TOKEN_KEY, token);
-        sessionStorage.setItem(TOKEN_EXP_KEY, String(expMs));
-    }
-
     function clearToken() {
         sessionStorage.removeItem(TOKEN_KEY);
         sessionStorage.removeItem(TOKEN_EXP_KEY);
     }
-
-    function tokenExpired() {
-        const exp = parseInt(sessionStorage.getItem(TOKEN_EXP_KEY) || '0', 10);
-        return !exp || Date.now() >= exp;
-    }
-
     function authHeaders(extra = {}) {
         const h = Object.assign({}, extra);
         const t = getToken();
         if (t) h['X-Hidden-Token'] = t;
         return h;
     }
-    // ── Timelog edit panel ────────────────────────────────────────────────────
-    const TIMELOG_API = '/api/hidden/timelog';
-
-    function openTimelogModal() {
-        // Just scroll into view; the panel is always visible.
-        const p = document.getElementById('timelogPanel');
-        if (p) p.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        document.getElementById('tlEmpCode').focus();
+    function tokenExpired() {
+        const e = parseInt(sessionStorage.getItem(TOKEN_EXP_KEY) || '0', 10);
+        return !e || Date.now() >= e;
     }
 
-    function _toLocalInput(dt) {
-        if (!dt) return '';
-        // dt can be ISO string from server; convert to "YYYY-MM-DDTHH:MM"
-        const d = new Date(dt);
-        if (isNaN(d.getTime())) return '';
-        const pad = n => String(n).padStart(2, '0');
-        return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    }
-
-    async function loadTimelog() {
-        const empCode = document.getElementById('tlEmpCode').value.trim();
-        const date = document.getElementById('tlDate').value;
-        if (!empCode || !date) {
-            toast('Nhập mã NV và ngày', 'error');
-            return;
-        }
-        try {
-            const res = await fetch(`${TIMELOG_API}?employee_code=${encodeURIComponent(empCode)}&date=${encodeURIComponent(date)}`, {
-                headers: authHeaders()
-            });
-            if (res.status === 401) { logout(); return; }
-            if (!res.ok) {
-                const d = await res.json().catch(() => ({}));
-                toast(d.detail || 'Lỗi tải timelog', 'error');
-                return;
-            }
-            const row = await res.json();
-            document.getElementById('tlCheckin').value = _toLocalInput(row.checkin_time);
-            document.getElementById('tlCheckout').value = _toLocalInput(row.checkout_time);
-            const ci = row.checkin_time ? new Date(row.checkin_time).toLocaleString('vi-VN') : '—';
-            const co = row.checkout_time ? new Date(row.checkout_time).toLocaleString('vi-VN') : '—';
-            const tag = (b) => b ? ' <span style="color:#856404;font-size:11px;">(đã sửa)</span>' : '';
-            document.getElementById('tlCurrent').innerHTML = `
-                <strong>${row.employee_code} - ${row.employee_name || ''}</strong> · ngày ${row.date}<br>
-                Checkin hiện tại: <code>${ci}</code>${tag(row.checkin_is_manual)} ·
-                Checkout hiện tại: <code>${co}</code>${tag(row.checkout_is_manual)}
-            `;
-        } catch (err) {
-            toast('Lỗi kết nối', 'error');
-        }
-    }
-
-    async function saveTimelog() {
-        const empCode = document.getElementById('tlEmpCode').value.trim();
-        const date = document.getElementById('tlDate').value;
-        const ci = document.getElementById('tlCheckin').value;
-        const co = document.getElementById('tlCheckout').value;
-        if (!empCode || !date) { toast('Nhập mã NV và ngày', 'error'); return; }
-        if (!ci && !co) { toast('Cần ít nhất 1 trong checkin/checkout', 'error'); return; }
-
-        const payload = {
-            employee_code: empCode,
-            date: date,
-            checkin_time: ci ? new Date(ci).toISOString() : null,
-            checkout_time: co ? new Date(co).toISOString() : null,
-        };
-        try {
-            const res = await fetch(`${TIMELOG_API}/update`, {
-                method: 'POST',
-                headers: authHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify(payload)
-            });
-            if (!res.ok) {
-                const d = await res.json().catch(() => ({}));
-                toast(d.detail || 'Lỗi lưu', 'error');
-                return;
-            }
-            toast('Đã lưu timelog');
-            loadTimelog();
-        } catch (err) {
-            toast('Lỗi kết nối', 'error');
-        }
-    }
-
-    async function checkSession() {
-        const t = getToken();
-        if (!t || tokenExpired()) {
-            clearToken();
-            showLogin();
-            return;
-        }
-        try {
-            const res = await fetch(API, { headers: authHeaders() });
-            if (res.ok) {
-                showMainApp();
-            } else if (res.status === 401) {
-                // Token expired or invalid
-                clearToken();
-                showLogin();
-            } else {
-                // Other error — still allow view in case of network glitch
-                showMainApp();
-            }
-        } catch {
-            showLogin();
-        }
-    }
-
-    function showLogin() {
-        document.getElementById('loginPage').style.display = 'flex';
-        document.getElementById('mainApp').style.display = 'none';
-    }
-
-    function showMainApp() {
-        document.getElementById('loginPage').style.display = 'none';
-        document.getElementById('mainApp').style.display = 'block';
-        document.getElementById('userInfo').textContent = '🔧 admin';
-        loadAttendance();
-    }
-
+    // ── Login flow ──────────────────────────────────────────────────────────
     async function login() {
-        const p = document.getElementById('password').value;
-        if (!p) return;
+        const pw = document.getElementById('password').value;
+        const errEl = document.getElementById('loginErr');
+        errEl.textContent = '';
+        if (!pw) return;
         try {
-            const res = await fetch(LOGIN_API, {
+            const r = await fetch(API_LOGIN, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password: p }),
+                body: JSON.stringify({ password: pw }),
             });
-            if (res.ok) {
-                const data = await res.json();
-                saveToken(data.token, data.expires_in);
-                document.getElementById('password').value = '';
-                showMainApp();
-            } else {
-                const d = await res.json().catch(() => ({}));
-                toast(d.detail || 'Sai mật khẩu', 'error');
+            if (!r.ok) {
+                const d = await r.json().catch(() => ({}));
+                errEl.textContent = d.detail || `Lỗi ${r.status}`;
+                return;
             }
-        } catch {
-            toast('Lỗi kết nối', 'error');
+            const data = await r.json();
+            saveToken(data.token, data.expires_in);
+            document.getElementById('password').value = '';
+            showMain();
+        } catch (e) {
+            errEl.textContent = 'Lỗi kết nối';
         }
     }
-
     function logout() {
         clearToken();
-        showLogin();
+        document.getElementById('main').style.display = 'none';
+        document.getElementById('login').style.display = 'block';
     }
-
-    // ── Toast ──────────────────────────────────────────────────────────────────
-    function toast(msg, kind = 'success') {
-        const el = document.getElementById('toast');
-        el.textContent = msg;
-        el.className = 'toast ' + kind;
-        el.style.display = 'block';
-        setTimeout(() => { el.style.display = 'none'; }, 3000);
-    }
-
-    // ── Load attendance ─────────────────────────────────────────────────────────
-    async function loadAttendance() {
-        const empId = document.getElementById('filterEmpId').value;
-        const dateVal = document.getElementById('filterDate').value;
-
-        let url = API + '?';
-        if (empId) url += `employee_id=${empId}&`;
-        if (dateVal) url += `date=${dateVal}&`;
-        url += `page=${page}&page_size=${PAGE_SIZE}`;
-
+    async function checkSession() {
+        if (!getToken() || tokenExpired()) {
+            clearToken();
+            document.getElementById('login').style.display = 'block';
+            return;
+        }
+        // Probe with a tiny request to confirm token is still valid.
         try {
-            const res = await fetch(url, {
-                headers: authHeaders()
-            });
+            const r = await fetch(API_LIST, { headers: authHeaders() });
+            if (r.status === 401) {
+                clearToken();
+                document.getElementById('login').style.display = 'block';
+                return;
+            }
+            if (r.ok) {
+                showMain();
+                return;
+            }
+        } catch {}
+        // If we can't reach, still let user try.
+        showMain();
+    }
+    function showMain() {
+        document.getElementById('login').style.display = 'none';
+        document.getElementById('main').style.display = 'block';
+        document.getElementById('pageTitle').style.display = 'block';
+        loadList();
+    }
 
-            if (res.status === 401) {
-                toast('Phiên đã hết hạn hoặc không hợp lệ. Vui lòng đăng nhập lại.', 'error');
-                logout();
+    // ── Load list ───────────────────────────────────────────────────────────
+    async function loadList() {
+        const tbody = document.getElementById('tbody');
+        const empty = document.getElementById('empty');
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:20px; color:#9ca3af;">Đang tải...</td></tr>';
+        try {
+            const r = await fetch(API_LIST, { headers: authHeaders() });
+            if (r.status === 401) { clearToken(); return; }
+            if (!r.ok) {
+                const d = await r.json().catch(() => ({}));
+                toast(d.detail || `Lỗi ${r.status}`, 'err');
+                tbody.innerHTML = '';
                 return;
             }
-            if (res.status === 403) {
-                const data = await res.json().catch(() => ({}));
-                if (data.detail && data.detail.includes('IP')) {
-                    toast('IP không được phép truy cập /hidden', 'error');
-                } else {
-                    toast('Không có quyền', 'error');
-                }
-                return;
-            }
-            if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
-                toast(data.detail || 'Lỗi tải dữ liệu', 'error');
-                return;
-            }
-
-            currentRows = await res.json();
-            // Backend sets Content-Range-like headers via X-Total-Count.
-            const totalHeader = res.headers.get('X-Total-Count');
-            totalRows = totalHeader ? parseInt(totalHeader, 10) : currentRows.length;
-            renderTable();
-            renderPagination();
-            renderStats();
-        } catch (err) {
-            console.error(err);
-            toast('Lỗi kết nối', 'error');
+            rows = await r.json();
+            renderRows();
+        } catch (e) {
+            toast('Lỗi kết nối', 'err');
         }
     }
 
-    // ── Render ──────────────────────────────────────────────────────────────────
-    function badge(onTime, earlyLeave) {
-        if (onTime && earlyLeave) return '<span class="badge badge-both">Đúng giờ + Sớm</span>';
-        if (onTime) return '<span class="badge badge-on">✓ Đúng giờ</span>';
-        if (earlyLeave) return '<span class="badge badge-early">↑ Về sớm</span>';
-        return '<span class="badge badge-none">✗ Thiếu</span>';
-    }
-
-    function fmt(dt) {
-        if (!dt) return '<span style="color:#ccc;">—</span>';
-        return new Date(dt).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-    }
-
-    function fmtDate(d) {
-        if (!d) return '—';
-        const [y, m, day] = d.split('T')[0].split('-');
-        return `${day}/${m}/${y}`;
-    }
-
-    function renderTable() {
-        const tbody = document.getElementById('attendanceBody');
-        const empty = document.getElementById('emptyState');
-        const sheet = document.querySelector('.sheet-container');
-
-        if (!currentRows || currentRows.length === 0) {
+    // ── Render ──────────────────────────────────────────────────────────────
+    function renderRows() {
+        const tbody = document.getElementById('tbody');
+        const empty = document.getElementById('empty');
+        const f = filter.trim().toLowerCase();
+        const view = !f ? rows : rows.filter(r =>
+            (r.employee_code || '').toLowerCase().includes(f) ||
+            (r.employee_name || '').toLowerCase().includes(f)
+        );
+        if (!view.length) {
             tbody.innerHTML = '';
             empty.style.display = 'block';
-            sheet.style.display = 'none';
             return;
         }
         empty.style.display = 'none';
-        sheet.style.display = 'block';
 
-        tbody.innerHTML = currentRows.map(row => `
-            <tr>
-                <td><strong>${row.id}</strong></td>
-                <td style="text-align:left;">${row.employee_name || `NV#${row.employee_id}`}</td>
-                <td>${fmtDate(row.date)}</td>
-                <td>${fmt(row.checkin_time)}</td>
-                <td>${fmt(row.checkout_time)}</td>
-                <td>
-                    ${row.shift ? `<span class="badge ${row.shift === 'AM' ? 'badge-on' : 'badge-both'}">${row.shift}</span>` : '—'}
-                    ${row.is_full_day ? `<span class="badge badge-on" style="margin-left:4px;">Full</span>` : ''}
-                </td>
-                <td>${badge(row.is_on_time, row.is_early_leave)}</td>
-                <td>
-                    <label class="flag-label">
-                        <input type="checkbox" ${row.is_on_time ? 'checked' : ''}
-                            onchange="toggleFlag(${row.id}, 'is_on_time', this.checked)">
-                        Đúng giờ
-                    </label>
-                </td>
-                <td>
-                    <label class="flag-label">
-                        <input type="checkbox" ${row.is_early_leave ? 'checked' : ''}
-                            onchange="toggleFlag(${row.id}, 'is_early_leave', this.checked)">
-                        Về sớm
-                    </label>
-                </td>
-                <td>
-                    <button class="btn btn-warning btn-sm" onclick="openEditModal(${row.id})">✏ Sửa</button>
-                    <button class="btn btn-danger btn-sm" onclick="deleteAtt(${row.id})">🗑 Xóa</button>
-                </td>
-            </tr>
-        `).join('');
-    }
+        tbody.innerHTML = view.map((r, i) => {
+            const ci = r.checkin_time ? toHHMM(r.checkin_time) : '';
+            const co = r.checkout_time ? toHHMM(r.checkout_time) : '';
+            return `
+                <tr data-id="${r.id}" data-emp-id="${r.employee_id}">
+                    <td class="center mono">${i + 1}</td>
+                    <td class="mono">${escapeHtml(r.employee_code || '')}</td>
+                    <td>${escapeHtml(r.employee_name || '')}</td>
+                    <td class="center mono">${r.date}</td>
+                    <td class="center">
+                        <input type="time" class="ci" value="${ci}">
+                        <button class="clear" title="Xóa giờ checkin">✕</button>
+                    </td>
+                    <td class="center">
+                        <input type="time" class="co" value="${co}">
+                        <button class="clear" title="Xóa giờ checkout">✕</button>
+                    </td>
+                    <td class="center">
+                        <button class="save">💾 Lưu</button>
+                    </td>
+                </tr>
+            `;
+        }).join('');
 
-    function renderStats() {
-        const total = currentRows.length;
-        const onTime = currentRows.filter(r => r.is_on_time).length;
-        const early = currentRows.filter(r => r.is_early_leave).length;
-        const both = currentRows.filter(r => r.is_on_time && r.is_early_leave).length;
-        document.getElementById('stats').innerHTML = `
-            <div class="stat-card"><h4>Tổng bản ghi</h4><div class="val">${total}</div></div>
-            <div class="stat-card"><h4>Đúng giờ</h4><div class="val ok">${onTime}</div></div>
-            <div class="stat-card"><h4>Về sớm</h4><div class="val warn">${early}</div></div>
-            <div class="stat-card"><h4>Đúng+Sớm</h4><div class="val">${both}</div></div>
-        `;
-    }
+        // Wire up clear + save buttons.
+        tbody.querySelectorAll('tr').forEach(tr => {
+            const id = tr.dataset.id;
+            const ciInput = tr.querySelector('.ci');
+            const coInput = tr.querySelector('.co');
+            const saveBtn = tr.querySelector('button.save');
+            const clears = tr.querySelectorAll('button.clear');
 
-    function renderPagination() {
-        const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
-        const hasNext = page < totalPages - 1;
-        const hasPrev = page > 0;
-        document.getElementById('pagination').innerHTML = `
-            <button class="page-btn" onclick="prevPage()" ${hasPrev ? '' : 'disabled'}>← Trang trước</button>
-            <span style="padding:5px 12px;align-self:center;font-size:13px;color:#666;">
-                Trang ${page + 1} / ${totalPages} (${totalRows} bản ghi)
-            </span>
-            <button class="page-btn" onclick="nextPage()" ${hasNext ? '' : 'disabled'}>Trang sau →</button>
-        `;
-    }
+            clears[0].addEventListener('click', () => { ciInput.value = ''; });
+            clears[1].addEventListener('click', () => { coInput.value = ''; });
 
-    function prevPage() { if (page > 0) { page--; loadAttendance(); } }
-    function nextPage() { page++; loadAttendance(); }
-
-    // ── Toggle flag inline ─────────────────────────────────────────────────────
-    async function toggleFlag(id, field, value) {
-        try {
-            const res = await fetch(`${API}/${id}`, {
-                method: 'PATCH',
-                headers: authHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ [field]: value })
-            });
-            if (!res.ok) {
-                const d = await res.json().catch(() => ({}));
-                toast(d.detail || 'Lỗi cập nhật', 'error');
-                loadAttendance();
-                return;
-            }
-            // Update local row
-            const row = currentRows.find(r => r.id === id);
-            if (row) row[field] = value;
-            renderStats();
-        } catch (err) {
-            toast('Lỗi kết nối', 'error');
-        }
-    }
-
-    // ── Edit modal ─────────────────────────────────────────────────────────────
-    function openEditModal(id) {
-        const row = currentRows.find(r => r.id === id);
-        if (!row) return;
-        document.getElementById('editAttId').value = row.id;
-        document.getElementById('editEmpName').value = row.employee_name || `NV#${row.employee_id}`;
-        document.getElementById('editAttDate').value = row.date.split('T')[0];
-        document.getElementById('editIsOnTime').checked = row.is_on_time;
-        document.getElementById('editIsEarlyLeave').checked = row.is_early_leave;
-        document.getElementById('editModal').classList.add('show');
-    }
-
-    function closeEditModal() {
-        document.getElementById('editModal').classList.remove('show');
-    }
-
-    async function saveEdit() {
-        const id = document.getElementById('editAttId').value;
-        const is_on_time = document.getElementById('editIsOnTime').checked;
-        const is_early_leave = document.getElementById('editIsEarlyLeave').checked;
-        try {
-            const res = await fetch(`${API}/${id}`, {
-                method: 'PATCH',
-                headers: authHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ is_on_time, is_early_leave })
-            });
-            if (!res.ok) {
-                const d = await res.json().catch(() => ({}));
-                toast(d.detail || 'Lỗi cập nhật', 'error');
-                return;
-            }
-            toast('Đã lưu');
-            closeEditModal();
-            loadAttendance();
-        } catch (err) { toast('Lỗi kết nối', 'error'); }
-    }
-
-    // ── Create modal ───────────────────────────────────────────────────────────
-    function openCreateModal() {
-        document.getElementById('createEmpCode').value = '';
-        document.getElementById('createDate').value = new Date().toISOString().split('T')[0];
-        document.getElementById('createCheckin').value = '';
-        document.getElementById('createCheckout').value = '';
-        document.getElementById('createPreview').textContent = '';
-        document.getElementById('createModal').classList.add('show');
-        setTimeout(() => document.getElementById('createEmpCode').focus(), 50);
-    }
-
-    function closeCreateModal() {
-        document.getElementById('createModal').classList.remove('show');
-    }
-
-    function _computeFlags(dateStr, checkinStr, checkoutStr) {
-        if (!dateStr) return null;
-        const dow = new Date(dateStr + 'T00:00:00').getDay();
-        const ci = checkinStr ? checkinStr.trim() : '';
-        const co = checkoutStr ? checkoutStr.trim() : '';
-
-        if (dow === 6) return { onTime: null, earlyLeave: null, label: 'CN — không tính công' };
-
-        let onTime = null, earlyLeave = null;
-        if (ci && co) {
-            onTime = ci <= '08:30';
-            earlyLeave = dow === 5 ? co < '12:00' : co < '13:30';
-        }
-
-        if (onTime === null && earlyLeave === null) return { onTime: null, earlyLeave: null, label: '' };
-        const parts = [];
-        if (onTime === true) parts.push('✓ đúng giờ');
-        else if (onTime === false) parts.push('⚠ đi muộn');
-        if (earlyLeave === true) parts.push('⚠ về sớm');
-        return { onTime, earlyLeave, label: parts.join(' · ') };
-    }
-
-    function updateCreatePreview() {
-        const dateStr = document.getElementById('createDate').value;
-        const ci = document.getElementById('createCheckin').value;
-        const co = document.getElementById('createCheckout').value;
-        const el = document.getElementById('createPreview');
-        if (!el) return;
-        const r = _computeFlags(dateStr, ci, co);
-        el.textContent = r ? r.label : '';
-    }
-
-    async function saveCreate() {
-        const empCode = document.getElementById('createEmpCode').value.trim();
-        const dateStr = document.getElementById('createDate').value;
-        const checkinStr = document.getElementById('createCheckin').value;
-        const checkoutStr = document.getElementById('createCheckout').value;
-
-        if (!empCode || !dateStr) { toast('Vui lòng nhập mã NV và ngày', 'error'); return; }
-
-        let checkin_time = null, checkout_time = null;
-        if (checkinStr) checkin_time = new Date(dateStr + 'T' + checkinStr + ':00').toISOString();
-        if (checkoutStr) checkout_time = new Date(dateStr + 'T' + checkoutStr + ':00').toISOString();
-
-        try {
-            const res = await fetch(API, {
-                method: 'PUT',
-                headers: authHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ employee_code: empCode, date: dateStr, checkin_time, checkout_time })
-            });
-            if (!res.ok) {
-                const d = await res.json().catch(() => ({}));
-                let msg = 'Lỗi tạo bản ghi';
-                if (d.detail) {
-                    if (typeof d.detail === 'string') msg = d.detail;
-                    else if (Array.isArray(d.detail)) msg = d.detail.map(e => `${e.loc.join('.')}: ${e.msg}`).join('; ');
-                    else msg = JSON.stringify(d.detail);
+            saveBtn.addEventListener('click', async () => {
+                saveBtn.disabled = true;
+                saveBtn.textContent = '⏳';
+                const payload = {
+                    checkin: ciInput.value || null,
+                    checkout: coInput.value || null,
+                };
+                try {
+                    const r = await fetch(`${API_LIST}/${id}/times`, {
+                        method: 'PATCH',
+                        headers: authHeaders({ 'Content-Type': 'application/json' }),
+                        body: JSON.stringify(payload),
+                    });
+                    if (!r.ok) {
+                        const d = await r.json().catch(() => ({}));
+                        toast(d.detail || `Lỗi ${r.status}`, 'err');
+                        tr.classList.add('row-error');
+                        setTimeout(() => tr.classList.remove('row-error'), 1500);
+                        return;
+                    }
+                    const updated = await r.json();
+                    // If the row is now both null, the server deleted it.
+                    if (!updated.checkin_time && !updated.checkout_time) {
+                        rows = rows.filter(x => x.id !== updated.id);
+                        tr.classList.add('row-saved');
+                        setTimeout(() => tr.remove(), 600);
+                        toast('Đã xóa bản ghi (cả 2 giờ trống)', 'ok');
+                        return;
+                    }
+                    // Patch local row in place and re-render.
+                    const idx = rows.findIndex(x => x.id === updated.id);
+                    if (idx >= 0) rows[idx] = updated;
+                    tr.classList.add('row-saved');
+                    setTimeout(() => tr.classList.remove('row-saved'), 1200);
+                    toast('Đã lưu', 'ok');
+                } catch (e) {
+                    toast('Lỗi kết nối', 'err');
+                } finally {
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = '💾 Lưu';
                 }
-                toast(msg, 'error');
-                return;
-            }
-            toast('Đã tạo bản ghi', 'success');
-            closeCreateModal();
-            loadAttendance();
-        } catch (err) { toast('Lỗi kết nối', 'error'); }
-    }
-
-    // ── Delete ─────────────────────────────────────────────────────────────────
-    async function deleteAtt(id) {
-        if (!confirm(`Xóa bản ghi chấm công id=${id}?`)) return;
-        try {
-            const res = await fetch(`${API}/${id}`, {
-                method: 'DELETE',
-                headers: authHeaders()
             });
-            if (!res.ok) {
-                const d = await res.json().catch(() => ({}));
-                toast(d.detail || 'Lỗi xóa', 'error');
-                return;
-            }
-            toast('Đã xóa');
-            loadAttendance();
-        } catch (err) { toast('Lỗi kết nối', 'error'); }
+        });
     }
 
-    // ── Escape to close modal ───────────────────────────────────────────────────
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') { closeEditModal(); closeCreateModal(); }
-    });
-
-    // ── Shift deadline settings ─────────────────────────────────────────────────
-    async function load_settings() {
-        try {
-            const r = await fetch('/api/attendance/settings');
-            if (!r.ok) return;
-            const s = await r.json();
-            document.getElementById('am_checkin_deadline').value = s.am_checkin_deadline || '08:30';
-            document.getElementById('pm_checkout_deadline').value = s.pm_checkout_deadline || '18:00';
-            if (s.am_checkin_deadline_date) {
-                document.getElementById('am_deadline_info').textContent = `Áp dụng từ: ${s.am_checkin_deadline_date}`;
-            }
-            if (s.pm_checkout_deadline_date) {
-                document.getElementById('pm_deadline_info').textContent = `Áp dụng từ: ${s.pm_checkout_deadline_date}`;
-            }
-        } catch (e) {
-            console.warn('Could not load settings', e);
-        }
+    function applyFilter() {
+        filter = document.getElementById('filter').value;
+        renderRows();
     }
 
-    async function save_settings() {
-        const am = document.getElementById('am_checkin_deadline').value;
-        const pm = document.getElementById('pm_checkout_deadline').value;
-        try {
-            const r = await fetch('/api/attendance/settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ am_checkin_deadline: am, pm_checkout_deadline: pm })
-            });
-            const s = document.getElementById('setting_status');
-            if (r.ok) {
-                s.textContent = 'Đã lưu! Áp dụng từ hôm nay trở đi.';
-                s.style.display = 'block';
-                // Update effective date display
-                const today = new Date().toISOString().split('T')[0];
-                document.getElementById('am_deadline_info').textContent = `Áp dụng từ: ${today}`;
-                document.getElementById('pm_deadline_info').textContent = `Áp dụng từ: ${today}`;
-            } else {
-                s.textContent = 'Lỗi khi lưu cấu hình';
-                s.style.color = '#dc3545';
-                s.style.display = 'block';
-            }
-        } catch (e) {
-            toast('Lỗi kết nối khi lưu cấu hình', 'error');
-        }
+    // ── Helpers ─────────────────────────────────────────────────────────────
+    function toHHMM(iso) {
+        // "2026-09-30T08:30:00" → "08:30"
+        if (!iso) return '';
+        const m = String(iso).match(/T(\d{2}:\d{2})/);
+        return m ? m[1] : '';
+    }
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+    }
+    function toast(msg, kind = 'ok') {
+        const el = document.getElementById('toast');
+        el.textContent = msg;
+        el.className = kind;
+        el.style.display = 'block';
+        clearTimeout(toast._t);
+        toast._t = setTimeout(() => { el.style.display = 'none'; }, 2500);
     }
 
-    // ── Init ────────────────────────────────────────────────────────────────────
+    // ── Init ────────────────────────────────────────────────────────────────
     checkSession();
-    load_settings();
     </script>
 </body>
 </html>

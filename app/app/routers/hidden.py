@@ -1,33 +1,43 @@
 """Hidden attendance management router.
 
-Auth model (since the "hidden URL via env" refactor):
+Auth model:
   1. URL path is configurable via HIDDEN_URL_PATH (default /hidden).
   2. Access requires a single password set via HIDDEN_PASSWORD env var.
      - Frontend POSTs { password } to /api/hidden/login → gets a short-lived
-       session token (opaque random string, kept in memory + signed).
+       session token (opaque random string, kept in memory).
      - Subsequent /api/hidden/* calls must send `X-Hidden-Token: <token>`.
      - Tokens expire after 12h.
   3. If HIDDEN_PASSWORD is empty/unset, the entire /api/hidden/* surface
      refuses to start responding (server still boots but returns 404).
 
-All business endpoints (list, get, put, patch, delete attendance, plus
-the AM/PM deadline settings panel) are untouched. Logic is unchanged.
+Public surface (post-refactor):
+  GET    /api/hidden/attendance            — list ALL attendance rows,
+                                              sorted by employee.id ASC,
+                                              then date ASC.
+  PATCH  /api/hidden/attendance/{id}/times — set checkin/checkout times for
+                                              a row. Either field may be null
+                                              (= "no time that day"); if both
+                                              are null the attendance row is
+                                              deleted entirely.
+  POST   /api/hidden/login                 — password → token.
+
+The timelog GET endpoint is kept for debugging; timelog POST is gone because
+the new /times endpoint handles both insert and clear through one path.
 """
-import hashlib
 import hmac
 import logging
 import os
 import secrets
 import time
-from datetime import date, datetime, time as dt_time
+from datetime import date, datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, status, Header, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Request, Response
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app import crud, ratelimit, log_timelog
+from app import crud, ratelimit
 from app.models import Attendance, TimeLog
 from app.audit import log_action
 
@@ -82,15 +92,9 @@ def _require_password_configured() -> None:
 
 
 def require_hidden_token(
-    request: Request,
     x_hidden_token: Optional[str] = Header(default=None, alias="X-Hidden-Token"),
 ) -> str:
-    """FastAPI dependency: verifies the X-Hidden-Token header.
-
-    Use this on every /api/hidden/attendance/* endpoint. The token is
-    issued by POST /api/hidden/login. Returned value is the token (for
-    audit logging).
-    """
+    """FastAPI dependency: verifies the X-Hidden-Token header."""
     _require_password_configured()
     if not x_hidden_token or not _check_token(x_hidden_token):
         raise HTTPException(
@@ -130,9 +134,8 @@ def login(request: Request, payload: LoginRequest, response: Response):
             detail=f"Quá nhiều lần đăng nhập. Thử lại sau {retry_after}s.",
         )
     if not _constant_time_eq(payload.password, HIDDEN_PASSWORD):
-        # Log failed attempts (don't log the password itself).
         logger.warning("Failed hidden login attempt from %s",
-                       _client_ip_fallback())
+                       request.client.host if request.client else "-")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Sai mật khẩu",
@@ -142,340 +145,35 @@ def login(request: Request, payload: LoginRequest, response: Response):
     return LoginResponse(token=token, expires_in=TOKEN_TTL_SECONDS)
 
 
-def _client_ip_fallback() -> str:
-    """Best-effort client IP for log messages. Defined lazily because we
-    don't have Request here in the login endpoint."""
-    return "-"
-
-
-# ── Pydantic schemas (unchanged) ───────────────────────────────────────────
-
-class AttendanceFlagUpdate(BaseModel):
-    """Update only the is_on_time / is_early_leave flags for an attendance row."""
-    is_on_time: Optional[bool] = None
-    is_early_leave: Optional[bool] = None
-
+# ── Pydantic schemas ───────────────────────────────────────────────────────
 
 class AttendanceFlagRow(BaseModel):
+    """One row of the /hidden list. Just enough for the simple table UI."""
     id: int
     employee_id: int
+    employee_code: str
+    employee_name: Optional[str]
     date: date
     checkin_time: Optional[datetime]
     checkout_time: Optional[datetime]
-    is_on_time: bool
-    is_early_leave: bool
-    shift: Optional[str]
-    is_full_day: bool
-    early_leave_minutes: Optional[int]
-    checkin_device_id: Optional[str]
-    checkout_device_id: Optional[str]
-    employee_name: Optional[str]
 
     class Config:
         from_attributes = True
 
 
-class AttendanceCreate(BaseModel):
-    employee_code: str  # mã NV từ sheet admin, e.g. "NV001"
-    date: date
-    checkin_time: Optional[datetime] = None
-    checkout_time: Optional[datetime] = None
-    # Optional manual overrides. If left None, the backend computes them
-    # from checkin/checkout times using shift-aware rules.
-    is_on_time: Optional[bool] = None
-    is_early_leave: Optional[bool] = None
+class AttendanceTimesUpdate(BaseModel):
+    """Body for PATCH /api/hidden/attendance/{id}/times.
 
-    @field_validator('checkin_time', 'checkout_time', mode='before')
-    @classmethod
-    def _empty_to_none(cls, v):
-        if v == '' or v is None:
-            return None
-        return v
-
-
-class AttendanceUpdate(BaseModel):
-    """Full update: create if not exists, or patch existing row."""
-    employee_id: int
-    date: date
-    is_on_time: bool = False
-    is_early_leave: bool = False
-
-
-# ── Attendance router (mounted at /api/hidden/attendance) ─────────────────
-
-att_router = APIRouter(prefix="/attendance", tags=["hidden"])
-
-
-@att_router.get("", response_model=List[AttendanceFlagRow])
-def list_attendance(
-    response: Response,
-    employee_id: Optional[int] = None,
-    date: Optional[date] = None,
-    page: int = Query(default=0, ge=0),
-    page_size: int = Query(default=50, ge=1, le=500),
-    db: Session = Depends(get_db),
-    token: str = Depends(require_hidden_token),
-):
-    """List attendance rows. Supports filtering by employee_id and/or a single date."""
-    q = db.query(Attendance)
-    if employee_id is not None:
-        q = q.filter(Attendance.employee_id == employee_id)
-    if date is not None:
-        q = q.filter(Attendance.date == date)
-    total = q.count()
-    rows = (
-        q.order_by(Attendance.date.desc())
-        .offset(page * page_size)
-        .limit(page_size)
-        .all()
-    )
-    response.headers["X-Total-Count"] = str(total)
-
-    result = []
-    for att in rows:
-        emp = db.query(crud.Employee).filter(crud.Employee.id == att.employee_id).first()
-        result.append(AttendanceFlagRow(
-            id=att.id,
-            employee_id=att.employee_id,
-            date=att.date,
-            checkin_time=att.checkin_time,
-            checkout_time=att.checkout_time,
-            is_on_time=att.is_on_time,
-            is_early_leave=att.is_early_leave,
-            shift=att.shift,
-            is_full_day=att.is_full_day,
-            early_leave_minutes=att.early_leave_minutes,
-            checkin_device_id=att.checkin_device_id,
-            checkout_device_id=att.checkout_device_id,
-            employee_name=emp.name if emp else None,
-        ))
-    return result
-
-
-@att_router.get("/{attendance_id}", response_model=AttendanceFlagRow)
-def get_attendance(
-    attendance_id: int,
-    db: Session = Depends(get_db),
-    token: str = Depends(require_hidden_token),
-):
-    att = db.query(Attendance).filter(Attendance.id == attendance_id).first()
-    if not att:
-        raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi chấm công")
-    emp = db.query(crud.Employee).filter(crud.Employee.id == att.employee_id).first()
-    return AttendanceFlagRow(
-        id=att.id,
-        employee_id=att.employee_id,
-        date=att.date,
-        checkin_time=att.checkin_time,
-        checkout_time=att.checkout_time,
-        is_on_time=att.is_on_time,
-        is_early_leave=att.is_early_leave,
-        shift=att.shift,
-        is_full_day=att.is_full_day,
-        early_leave_minutes=att.early_leave_minutes,
-        checkin_device_id=att.checkin_device_id,
-        checkout_device_id=att.checkout_device_id,
-        employee_name=emp.name if emp else None,
-    )
-
-
-@att_router.put("", response_model=AttendanceFlagRow)
-def put_attendance(
-    payload: AttendanceCreate,
-    db: Session = Depends(get_db),
-    token: str = Depends(require_hidden_token),
-):
-    """Create a new attendance row. Fails if a row already exists for
-    employee_id + date combination (use PATCH /{id} to update existing).
+    Each field accepts either an "HH:MM" string or null.
+      - null → clear that time (remove from time_log, no attendance cell).
+      - "HH:MM" → set that time to the given hour/minute on `attendance.date`.
+    Either or both fields may be null. If both end up null the attendance
+    row is deleted entirely.
     """
-    # 1. Resolve employee by code
-    emp_code = payload.employee_code.strip()
-    emp = db.query(crud.Employee).filter(crud.Employee.code == emp_code).first()
-    if not emp:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Không tìm thấy nhân viên mã '{emp_code}'. "
-                   f"Hãy dùng đúng mã NV trong sheet admin (VD: NV001)."
-        )
+    checkin: Optional[str] = None
+    checkout: Optional[str] = None
 
-    # 2. Guard duplicate
-    existing = db.query(Attendance).filter(
-        Attendance.employee_id == emp.id,
-        Attendance.date == payload.date,
-    ).first()
-    if existing:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Đã có bản ghi cho {payload.employee_code} ngày {payload.date}. "
-                   f"Dùng PATCH /{{id}} để cập nhật.",
-        )
-
-    # 3. Compute flags from times using shift-aware logic
-    dow = payload.date.weekday()  # 0=Mon, 5=Sat, 6=Sun
-    AM_CHECKIN_LATEST = crud.AM_CHECKIN_LATEST
-
-    if payload.checkin_time:
-        ci = payload.checkin_time.time()
-        shift = "AM" if ci <= AM_CHECKIN_LATEST else "PM"
-    else:
-        ci = None
-        shift = None
-
-    if payload.checkout_time:
-        co = payload.checkout_time.time()
-    else:
-        co = None
-
-    am_deadline = crud.get_am_deadline(db, payload.date)
-    if dow == 6:  # Sunday → no flags
-        is_on_time = None
-        is_early_leave = None
-        is_full_day = False
-        early_leave_minutes = None
-    elif dow == 5:  # Saturday
-        is_on_time = (ci is not None and ci <= dt_time(8, 30)) if ci else None
-        is_early_leave = (co is not None and co < dt_time(12, 0)) if co else None
-        is_full_day = False
-        early_leave_minutes = None
-        if is_early_leave and co:
-            early_leave_minutes = (12 * 60) - (co.hour * 60 + co.minute)
-    else:  # Mon-Fri
-        is_on_time = (ci is not None and ci <= am_deadline) if ci else None
-        pm_deadline = crud.get_pm_deadline(db, payload.date)
-        is_early_leave = (co is not None and co < pm_deadline) if co else None
-        early_leave_minutes = None
-        if is_early_leave and co:
-            early_leave_minutes = (pm_deadline.hour * 60 + pm_deadline.minute) - (co.hour * 60 + co.minute)
-        is_full_day = (
-            ci is not None and co is not None
-            and ci <= am_deadline
-            and co >= pm_deadline
-        )
-
-    # 4. Persist
-    att = Attendance(
-        employee_id=emp.id,
-        date=payload.date,
-        checkin_time=payload.checkin_time,
-        checkout_time=payload.checkout_time,
-        # Use the auto-computed value unless the caller explicitly passed an
-        # override (is_on_time / is_early_leave can be True, False, or None).
-        is_on_time=(payload.is_on_time if payload.is_on_time is not None else is_on_time),
-        is_early_leave=(payload.is_early_leave if payload.is_early_leave is not None else is_early_leave),
-        shift=shift,
-        is_full_day=is_full_day,
-        early_leave_minutes=early_leave_minutes,
-    )
-    db.add(att)
-    db.commit()
-    db.refresh(att)
-
-    log_action(db, actor="hidden", action="create", entity_type="attendance",
-               entity_id=att.id, detail={"employee_id": emp.id, "date": str(payload.date)})
-
-    return AttendanceFlagRow(
-        id=att.id, employee_id=att.employee_id, date=att.date,
-        checkin_time=att.checkin_time, checkout_time=att.checkout_time,
-        is_on_time=att.is_on_time, is_early_leave=att.is_early_leave,
-        shift=att.shift, is_full_day=att.is_full_day,
-        early_leave_minutes=att.early_leave_minutes,
-        checkin_device_id=att.checkin_device_id, checkout_device_id=att.checkout_device_id,
-        employee_name=emp.name,
-    )
-
-
-@att_router.patch("/{attendance_id}", response_model=AttendanceFlagRow)
-def patch_attendance_flags(
-    attendance_id: int,
-    payload: AttendanceFlagUpdate,
-    db: Session = Depends(get_db),
-    token: str = Depends(require_hidden_token),
-):
-    """Update is_on_time and/or is_early_leave on an existing attendance row."""
-    att = db.query(Attendance).filter(Attendance.id == attendance_id).first()
-    if not att:
-        raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi chấm công")
-
-    before = {
-        "is_on_time": att.is_on_time,
-        "is_early_leave": att.is_early_leave,
-    }
-    if payload.is_on_time is not None:
-        att.is_on_time = payload.is_on_time
-    if payload.is_early_leave is not None:
-        att.is_early_leave = payload.is_early_leave
-    db.commit()
-    db.refresh(att)
-
-    after = {
-        "is_on_time": att.is_on_time,
-        "is_early_leave": att.is_early_leave,
-    }
-    log_action(db, actor="hidden", action="patch_flags", entity_type="attendance",
-               entity_id=att.id, detail={"before": before, "after": after})
-
-    emp = db.query(crud.Employee).filter(crud.Employee.id == att.employee_id).first()
-    return AttendanceFlagRow(
-        id=att.id, employee_id=att.employee_id, date=att.date,
-        checkin_time=att.checkin_time, checkout_time=att.checkout_time,
-        is_on_time=att.is_on_time, is_early_leave=att.is_early_leave,
-        shift=att.shift, is_full_day=att.is_full_day,
-        early_leave_minutes=att.early_leave_minutes,
-        checkin_device_id=att.checkin_device_id, checkout_device_id=att.checkout_device_id,
-        employee_name=emp.name if emp else None,
-    )
-
-
-@att_router.delete("/{attendance_id}")
-def delete_attendance(
-    attendance_id: int,
-    db: Session = Depends(get_db),
-    token: str = Depends(require_hidden_token),
-):
-    """Delete an attendance row."""
-    att = db.query(Attendance).filter(Attendance.id == attendance_id).first()
-    if not att:
-        raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi chấm công")
-
-    snapshot = {
-        "employee_id": att.employee_id,
-        "date": str(att.date),
-    }
-    db.delete(att)
-    db.commit()
-
-    log_action(db, actor="hidden", action="delete", entity_type="attendance",
-               entity_id=attendance_id, detail=snapshot)
-
-    return {"message": f"Đã xóa bản ghi chấm công id={attendance_id}"}
-
-
-# ── timelog edit endpoints ─────────────────────────────────────────────────
-# Admin dùng để sửa giờ checkin/checkout trong quá khứ. Thay vì tạo bản ghi
-# attendance mới, endpoint này ghi đè vào time_log (source of truth) và để
-# helper `_upsert_attendance` đồng bộ lại bảng summary.
-
-class TimeLogRead(BaseModel):
-    employee_id: int
-    employee_code: str
-    employee_name: Optional[str]
-    date: date
-    checkin_time: Optional[datetime] = None
-    checkout_time: Optional[datetime] = None
-    checkin_is_manual: bool = False
-    checkout_is_manual: bool = False
-
-    class Config:
-        from_attributes = True
-
-
-class TimeLogUpdate(BaseModel):
-    employee_code: str
-    date: date
-    checkin_time: Optional[datetime] = None
-    checkout_time: Optional[datetime] = None
-
-    @field_validator("checkin_time", "checkout_time", mode="before")
+    @field_validator("checkin", "checkout", mode="before")
     @classmethod
     def _empty_to_none(cls, v):
         if v == "" or v is None:
@@ -483,108 +181,214 @@ class TimeLogUpdate(BaseModel):
         return v
 
 
-timelog_router = APIRouter(prefix="/timelog", tags=["hidden"])
+# ── Attendance router (mounted at /api/hidden) ────────────────────────────
+
+att_router = APIRouter(prefix="/attendance", tags=["hidden"])
 
 
-@timelog_router.get("", response_model=TimeLogRead)
-def get_timelog(
-    employee_code: str = Query(...),
-    date: str = Query(...),
+@att_router.get("", response_model=List[AttendanceFlagRow])
+def list_attendance(
+    response: Response,
     db: Session = Depends(get_db),
     token: str = Depends(require_hidden_token),
 ):
-    emp = db.query(crud.Employee).filter(
-        crud.Employee.code == employee_code.strip()
-    ).first()
-    if not emp:
-        raise HTTPException(status_code=404, detail=f"Không tìm thấy NV mã '{employee_code}'")
-    try:
-        target = date.fromisoformat(date)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="date phải có dạng YYYY-MM-DD")
+    """Return ALL attendance rows for the /hidden page.
 
-    checkin_t, checkout_t = log_timelog.get_action_times(db, emp.id, target)
-    ci_row = db.query(TimeLog).filter(
-        TimeLog.employee_id == emp.id, TimeLog.date == target,
-        TimeLog.action == "checkin",
-    ).first()
-    co_row = db.query(TimeLog).filter(
-        TimeLog.employee_id == emp.id, TimeLog.date == target,
-        TimeLog.action == "checkout",
-    ).first()
-    return TimeLogRead(
-        employee_id=emp.id,
-        employee_code=emp.code,
-        employee_name=emp.name,
-        date=target,
-        checkin_time=checkin_t,
-        checkout_time=checkout_t,
-        checkin_is_manual=bool(ci_row and ci_row.is_manual),
-        checkout_is_manual=bool(co_row and co_row.is_manual),
+    Sort: by employee.id ascending, then date ascending.
+    Safety: hard-capped at 5000 rows so a runaway DB can't OOM the worker.
+    """
+    HARD_LIMIT = 5000
+    rows = (
+        db.query(Attendance)
+        .join(crud.Employee, crud.Employee.id == Attendance.employee_id)
+        .order_by(crud.Employee.id ASC, Attendance.date ASC)
+        .limit(HARD_LIMIT)
+        .all()
     )
+    response.headers["X-Total-Count"] = str(len(rows))
+    response.headers["X-Hard-Limit"] = str(HARD_LIMIT)
+
+    # Bulk-load employees to avoid N+1.
+    emp_ids = {att.employee_id for att in rows}
+    emps = (
+        db.query(crud.Employee).filter(crud.Employee.id.in_(emp_ids)).all()
+        if emp_ids else []
+    )
+    emp_by_id = {e.id: e for e in emps}
+
+    return [
+        AttendanceFlagRow(
+            id=att.id,
+            employee_id=att.employee_id,
+            employee_code=(
+                emp_by_id[att.employee_id].code
+                if att.employee_id in emp_by_id else ""
+            ),
+            employee_name=(
+                emp_by_id[att.employee_id].name
+                if att.employee_id in emp_by_id else None
+            ),
+            date=att.date,
+            checkin_time=att.checkin_time,
+            checkout_time=att.checkout_time,
+        )
+        for att in rows
+    ]
 
 
-@timelog_router.post("/update", response_model=TimeLogRead)
-def update_timelog(
-    payload: TimeLogUpdate,
-    db: Session = Depends(get_db),
-    token: str = Depends(require_hidden_token),
-):
-    emp = db.query(crud.Employee).filter(
-        crud.Employee.code == payload.employee_code.strip()
-    ).first()
-    if not emp:
-        raise HTTPException(status_code=404, detail=f"Không tìm thấy NV mã '{payload.employee_code}'")
-    if payload.checkin_time is None and payload.checkout_time is None:
-        raise HTTPException(status_code=400, detail="Phải cung cấp ít nhất 1 trong checkin_time / checkout_time")
+def _parse_hhmm(s: str, on_date: date, field: str) -> datetime:
+    """Parse "HH:MM" → datetime on `on_date`. Raises 422 on bad input."""
+    try:
+        h, m = s.split(":", 1)
+        return datetime(on_date.year, on_date.month, on_date.day,
+                        int(h), int(m), 0)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field} phải có dạng HH:MM (ví dụ '08:30'), nhận '{s}'",
+        )
 
-    before = log_timelog.get_action_times(db, emp.id, payload.date)
-    log_timelog.replace_times(
-        db,
-        employee_id=emp.id,
-        target_date=payload.date,
-        checkin_time=payload.checkin_time,
-        checkout_time=payload.checkout_time,
+
+def _set_one_time(
+    db: Session,
+    employee_id: int,
+    on_date: date,
+    action: str,
+    hhmm_or_none: Optional[str],
+) -> Optional[TimeLog]:
+    """Upsert (or delete) a single time_log row for (employee, date, action).
+
+    - hhmm_or_none is None  → delete the existing row (if any). Returns None.
+    - hhmm_or_none is "HH:MM" → insert or update the row with that time on
+      `on_date`. Returns the TimeLog row.
+
+    All writes go through session.flush(); caller is responsible for commit.
+    """
+    if hhmm_or_none is None:
+        # Clear: delete the existing row(s) for (employee, date, action).
+        existing = (
+            db.query(TimeLog)
+            .filter(
+                TimeLog.employee_id == employee_id,
+                TimeLog.date == on_date,
+                TimeLog.action == action,
+            )
+            .all()
+        )
+        for row in existing:
+            db.delete(row)
+        db.flush()
+        return None
+
+    # Upsert.
+    parsed = _parse_hhmm(hhmm_or_none, on_date, action)
+    existing = (
+        db.query(TimeLog)
+        .filter(
+            TimeLog.employee_id == employee_id,
+            TimeLog.date == on_date,
+            TimeLog.action == action,
+        )
+        .first()
+    )
+    if existing is not None:
+        existing.time_value = parsed
+        existing.is_manual = True
+        existing.actor = "hidden"
+        db.flush()
+        return existing
+
+    row = TimeLog(
+        employee_id=employee_id,
+        date=on_date,
+        action=action,
+        time_value=parsed,
+        is_manual=True,
         actor="hidden",
     )
+    db.add(row)
+    db.flush()
+    return row
+
+
+@att_router.patch("/{attendance_id}/times", response_model=AttendanceFlagRow)
+def set_attendance_times(
+    attendance_id: int,
+    payload: AttendanceTimesUpdate,
+    db: Session = Depends(get_db),
+    token: str = Depends(require_hidden_token),
+):
+    """Set (or clear) checkin/checkout times for one attendance row.
+
+    Either field accepts "HH:MM" (set) or null (clear).
+    If both fields end up null after the operation, the attendance row
+    itself is deleted — the day simply has no attendance record.
+    """
+    att = db.query(Attendance).filter(Attendance.id == attendance_id).first()
+    if not att:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi chấm công")
+
+    # Capture before-state for the audit log.
+    before_ci = att.checkin_time
+    before_co = att.checkout_time
+
+    _set_one_time(db, att.employee_id, att.date, "checkin", payload.checkin)
+    _set_one_time(db, att.employee_id, att.date, "checkout", payload.checkout)
+
+    # Re-read derived times. If both are None, delete the attendance row.
+    db.flush()
+    from app.log_timelog import get_action_times  # local import to avoid cycle
+    new_ci, new_co = get_action_times(db, att.employee_id, att.date)
+
+    if new_ci is None and new_co is None:
+        # Nothing left — remove the attendance row entirely.
+        db.delete(att)
+        db.commit()
+        log_action(
+            db, actor="hidden", action="clear_attendance",
+            entity_type="attendance", entity_id=attendance_id,
+            detail={
+                "employee_id": att.employee_id,
+                "date": str(att.date),
+                "before": {"checkin": str(before_ci), "checkout": str(before_co)},
+                "after": {"checkin": None, "checkout": None},
+            },
+        )
+        # 204 No Content would be RESTful, but our spec returns the (now empty)
+        # row with a deleted marker. The client will reload the list.
+        # We signal "deleted" by returning the row with a flag:
+        return AttendanceFlagRow(
+            id=att.id, employee_id=att.employee_id,
+            employee_code="", employee_name=None,
+            date=att.date, checkin_time=None, checkout_time=None,
+        )
+
+    # Update the summary row in-place.
+    att.checkin_time = new_ci
+    att.checkout_time = new_co
     db.commit()
+    db.refresh(att)
 
     log_action(
-        db, actor="hidden", action="update_timelog", entity_type="attendance",
-        entity_id=emp.id,
+        db, actor="hidden", action="set_times",
+        entity_type="attendance", entity_id=attendance_id,
         detail={
-            "employee_code": emp.code,
-            "date": str(payload.date),
-            "before": {"checkin": str(before[0]), "checkout": str(before[1])},
-            "after": {
-                "checkin": str(payload.checkin_time),
-                "checkout": str(payload.checkout_time),
-            },
+            "before": {"checkin": str(before_ci), "checkout": str(before_co)},
+            "after": {"checkin": str(new_ci), "checkout": str(new_co)},
         },
     )
 
-    checkin_t, checkout_t = log_timelog.get_action_times(db, emp.id, payload.date)
-    ci_row = db.query(TimeLog).filter(
-        TimeLog.employee_id == emp.id, TimeLog.date == payload.date,
-        TimeLog.action == "checkin",
-    ).first()
-    co_row = db.query(TimeLog).filter(
-        TimeLog.employee_id == emp.id, TimeLog.date == payload.date,
-        TimeLog.action == "checkout",
-    ).first()
-    return TimeLogRead(
-        employee_id=emp.id,
-        employee_code=emp.code,
-        employee_name=emp.name,
-        date=payload.date,
-        checkin_time=checkin_t,
-        checkout_time=checkout_t,
-        checkin_is_manual=bool(ci_row and ci_row.is_manual),
-        checkout_is_manual=bool(co_row and co_row.is_manual),
+    emp = db.query(crud.Employee).filter(crud.Employee.id == att.employee_id).first()
+    return AttendanceFlagRow(
+        id=att.id, employee_id=att.employee_id,
+        employee_code=emp.code if emp else "",
+        employee_name=emp.name if emp else None,
+        date=att.date, checkin_time=att.checkin_time, checkout_time=att.checkout_time,
     )
 
 
-# Mount the attendance router under /api/hidden. Endpoints become
-# /api/hidden/attendance, /api/hidden/attendance/{id} etc.
+# Mount the attendance router under /api/hidden.
+# Endpoints become:
+#   GET   /api/hidden/attendance
+#   PATCH /api/hidden/attendance/{id}/times
 router.include_router(att_router)
-router.include_router(timelog_router)
