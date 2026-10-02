@@ -20,7 +20,7 @@ import os
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app import crud
 from app.schemas import SheetData
+from app.routers.auth import _require_session
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
@@ -168,12 +169,26 @@ def export_excel(
     year: int = Query(default=None),
     month: int = Query(default=None),
     db: Session = Depends(get_db),
+    _: str = Depends(_require_session),
 ):
     today = date.today()
     if year is None:
         year = today.year
     if month is None:
         month = today.month
+
+    # Input validation: refuse obviously invalid ranges with 422 instead of
+    # letting the downstream code crash on date(year, month-1, 26) or similar.
+    if not (1 <= month <= 12):
+        raise HTTPException(
+            status_code=422,
+            detail=f"month must be between 1 and 12 (got {month})",
+        )
+    if not (1900 <= year <= 2999):
+        raise HTTPException(
+            status_code=422,
+            detail=f"year must be between 1900 and 2999 (got {year})",
+        )
 
     # Get the sheet data (same as /api/stats/sheet)
     sheet = crud.get_sheet_data(db, year, month)

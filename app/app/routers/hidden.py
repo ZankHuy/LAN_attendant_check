@@ -40,6 +40,7 @@ from app.database import get_db
 from app import crud, ratelimit
 from app.models import Attendance, TimeLog
 from app.audit import log_action
+from sqlalchemy import asc
 
 logger = logging.getLogger("checknv.hidden")
 
@@ -201,7 +202,7 @@ def list_attendance(
     rows = (
         db.query(Attendance)
         .join(crud.Employee, crud.Employee.id == Attendance.employee_id)
-        .order_by(crud.Employee.id ASC, Attendance.date ASC)
+        .order_by(asc(crud.Employee.id), asc(Attendance.date))
         .limit(HARD_LIMIT)
         .all()
     )

@@ -37,6 +37,18 @@ data/checknv.db-wal
 data/checknv.db-shm
 backups/
 
+# Local-only symlinks / copies created during local testing (mirror the
+# container layout so uvicorn can find static/, resorce/, data/).
+# These paths should NOT be committed — the canonical copies live at the
+# repo root and are mounted into the container at build time.
+app/data/
+app/static/
+app/resorce/
+
+# Local test artefacts (kept out of the repo).
+test_out_*.xlsx
+scripts/debug_*.py
+
 # Secrets / env overrides (the .env.example file IS tracked)
 .env
 .env.*
