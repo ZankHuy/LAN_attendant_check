@@ -67,3 +67,21 @@ resorce/*.xls
 # Operational runbook (kept out of git to keep repo lean for new operators;
 # re-add if you want to publish it on GitHub.)
 HUONG-DAN-VAN-HANH.md
+
+# Local smoke-test outputs (created by scripts/test_*.py)
+test_out_*.xlsx
+
+# One-off debug scripts (kept out of git; reproduce by hand if needed)
+scripts/debug_*.py
+
+# Data directory runtime artefacts that may sneak in (gitignore above
+# already covers data/, but be explicit about the files people copy in)
+data/app.log
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+app/data/*.db
+app/data/*.log
+app/resorce/*.xlsx
+app/resorce/*.xls
