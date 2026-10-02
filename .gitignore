@@ -54,9 +54,13 @@ scripts/debug_*.py
 .env.*
 !.env.example
 
-# Excel templates (operator-supplied via Docker volume or env var)
+# Excel templates (operator-supplied via Docker volume or env var).
+# A baseline template is committed so a fresh deployment works out-of-the-box;
+# operators can replace it with their own template by mounting ./resorce as a
+# volume (see docker-compose.yml) without rebuilding the image.
 resorce/*.xlsx
 resorce/*.xls
+!resorce/template.xlsx
 !resorce/README.md
 
 # Backups / scratch
