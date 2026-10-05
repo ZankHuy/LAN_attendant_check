@@ -560,17 +560,19 @@ def compute_work_day(
       - checkin_status:   "normal" | "late" | "faulty" | None
       - checkout_status:  "normal" | "early" | "faulty" | None
 
-    Quy tắc (mới, on-the-fly, không cache):
+    Quy tắc (on-the-fly, không cache):
       - CN (dow=6): work_value=None
       - Không checkin: work_value=0, status=absent
-      - T2-T6:
+      - Có checkin nhưng KHÔNG có checkout: work_value=0, status=no_checkout
+        (quy tắc "phải đủ checkin VÀ checkout" — áp dụng cho T2-T7)
+      - T2-T6 (đã có đủ 2 giờ):
           * checkin > 18:00 (lỗi)                              → 0
-          * checkout < 8:30 và có checkin (lỗi)                → 0
+          * checkout < 8:30 (lỗi)                              → 0
           * checkin <= 12:00 AND checkout >= 13:30             → 1
           * checkin <= 12:00 AND checkout <  13:30             → 0.5 (buổi sáng)
           * checkin >  12:00 AND checkout <  13:30             → 0   (PM lỗi)
-          * checkin >  12:00 (có/không checkout)               → 0.5 (buổi chiều)
-      - T7 (dow=5): bất kỳ checkin nào → 0.5
+          * checkin >  12:00 AND checkout >= 13:30             → 0.5 (buổi chiều)
+      - T7 (dow=5, đã có đủ 2 giờ): → 0.5
     """
     dow = target_date.weekday()
 
@@ -596,10 +598,25 @@ def compute_work_day(
             "checkout_status": None,
         }
 
+    # ── Quy tắc "đủ 2 giờ" ─────────────────────────────────────────────────
+    # Có checkin nhưng thiếu checkout → ngày đó KHÔNG tính công (0 công).
+    # Đặt gate ở đây (trước mọi nhánh T7 / T2-T6) để quy tắc áp dụng
+    # đồng nhất cho cả tuần: thiếu 1 trong 2 giờ = không công.
+    if checkout_dt is None:
+        return {
+            "work_value": 0,
+            "status": "no_checkout",
+            "symbol": "0",
+            "is_holiday": False,
+            "holiday_kind": None,
+            "checkin_status": classify_checkin(checkin_dt.time(), dow),
+            "checkout_status": "no_checkout",
+        }
+
     ci_t = checkin_dt.time()
-    co_t = checkout_dt.time() if checkout_dt else None
+    co_t = checkout_dt.time()
     ci_status = classify_checkin(ci_t, dow)
-    co_status = classify_checkout(co_t, dow) if co_t else "no_checkout"
+    co_status = classify_checkout(co_t, dow)
 
     # ── Quy tắc "lỗi" ghi đè ────────────────────────────────────────────────
     # Checkin lỗi: timein > 18:00 → ngày đó = 0 công (dù cho có checkout)
@@ -638,15 +655,12 @@ def compute_work_day(
             "checkout_status": co_status,
         }
 
-    # Weekday rules (Mon-Fri)
+    # Weekday rules (Mon-Fri). Lưu ý: tới đây chắc chắn đã có CẢ checkin
+    # VÀ checkout (gate "đủ 2 giờ" ở trên đã loại trường hợp thiếu checkout),
+    # nên co_t luôn khác None.
     if ci_t <= NOON:
         # AM shift
-        if co_t is None:
-            # No checkout → still count 1 (forgot checkout). Frontend will
-            # show "No" in the checkout row but work_value stays at 1.
-            work = 1
-            status = "no_checkout"
-        elif co_t < HALF_DAY_PM_BORDER:
+        if co_t < HALF_DAY_PM_BORDER:
             work = 0.5   # morning only
             status = "half_day"
         else:
@@ -654,7 +668,7 @@ def compute_work_day(
             status = "on_time"
     else:
         # PM shift (checkin > 12:00)
-        if co_t is not None and co_t < HALF_DAY_PM_BORDER:
+        if co_t < HALF_DAY_PM_BORDER:
             work = 0     # PM-loi
             status = "absent"
         else:
@@ -784,8 +798,11 @@ def get_sheet_data(db: Session, year: int, month: int) -> dict:
             for d in dates:
                 dow = d.weekday()
                 slot = tl_by_emp_date.get((emp.id, d))
-                checkin_dt = slot["checkin"] if slot else None
-                checkout_dt = slot["checkout"] if slot else None
+                # Dùng .get() thay vì [] vì slot chỉ có key cho loại giờ thực
+                # sự có: ngày chỉ có checkin thì slot không có key "checkout"
+                # (thiếu 1 trong 2 giờ là tình huống bình thường).
+                checkin_dt = slot.get("checkin") if slot else None
+                checkout_dt = slot.get("checkout") if slot else None
 
                 ci_status = None
                 co_status = None
@@ -856,6 +873,9 @@ def get_sheet_data(db: Session, year: int, month: int) -> dict:
                     if checkout_dt is not None:
                         checkout_display = checkout_dt.strftime("%H:%M")
                     elif checkin_dt is not None:
+                        # Ngày có checkin nhưng thiếu checkout → 0 công theo
+                        # quy tắc "đủ 2 giờ". Vẫn hiển thị "No" để admin
+                        # thấy rõ nguyên nhân ngày đó không được tính công.
                         checkout_display = "No"
                     else:
                         checkout_display = ""

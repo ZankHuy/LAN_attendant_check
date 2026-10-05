@@ -84,7 +84,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 | Trang chấm công | `http://localhost:8000/` | Checkin / Checkout nhân viên |
 | Trang quản lý | `http://localhost:8000/admin` | Quản lý nhân viên, xuất bảng công |
 | Trang đăng nhập | `http://localhost:8000/login` | Đăng nhập user |
-| Trang ẩn | `http://localhost:8000/hidden` | Chỉnh sửa cờ chấm công (cần account `edit_attendance`) |
+| Trang ẩn | `http://localhost:8000/hidden` | Lọc / sửa / tạo bản ghi chấm công (mật khẩu `HIDDEN_PASSWORD`) |
 
 ### 2.4. Tài khoản mặc định
 
@@ -329,13 +329,23 @@ UNIQUE: `(employee_id, date, action)`.
 
 ### 6.6. Hidden (`/api/hidden/attendance`)
 
-| Method | Endpoint | Mô tả | Auth |
-|---|---|---|---|
-| `GET` | `/` | Danh sách bản ghi (lọc theo NV/ngày) | edit_attendance |
-| `GET` | `/{id}` | Chi tiết 1 bản ghi | edit_attendance |
-| `PUT` | `/` | Tạo bản ghi mới | edit_attendance |
-| `PATCH` | `/{id}` | Sửa cờ is_on_time / is_early_leave | edit_attendance |
-| `DELETE` | `/{id}` | Xóa bản ghi | edit_attendance |
+Auth: header `X-Hidden-Token` (lấy từ `POST /api/hidden/login` với `HIDDEN_PASSWORD`).
+
+| Method | Endpoint | Mô tả |
+|---|---|---|
+| `POST` | `/api/hidden/login` | Đổi mật khẩu → token (hạn 12h) |
+| `GET` | `/api/hidden/attendance?from=&to=` | Danh sách bản ghi, lọc theo khoảng ngày (tối đa 366 ngày/lần) |
+| `POST` | `/api/hidden/attendance` | Tạo bản ghi mới cho ngày chưa có bản ghi (chỉ ngày đã qua/hôm nay) |
+| `PATCH` | `/api/hidden/attendance/{id}/times` | Sửa giờ checkin/checkout (xoá bản ghi nếu cả 2 trống) |
+
+Body của `POST /api/hidden/attendance`:
+
+```json
+{ "employee_id": 1, "date": "2026-10-01", "checkin": "08:00", "checkout": "17:30" }
+```
+
+Mã lỗi: `404` nhân viên không tồn tại · `409` đã có bản ghi cho ngày đó (dùng `PATCH`) ·
+`422` ngày tương lai / cả 2 giờ trống / sai định dạng `HH:MM` / `from > to`.
 
 ### 6.7. Hidden Timelog (`/api/hidden/timelog`)
 
@@ -396,14 +406,21 @@ Quy tắc hiển thị theo thời gian:
 - Có thể chỉnh thời gian cấm trong `/admin`
 - Device ID = fingerprint của trình duyệt (localStorage)
 
-### 7.4. Trang Hidden (/hidden)
+### 7.5. Trang Hidden (`/hidden`)
 
-Dùng để chỉnh sửa thủ công các bản ghi chấm công:
+Dùng để chỉnh sửa thủ công các bản ghi chấm công (yêu cầu mật khẩu `HIDDEN_PASSWORD`):
 
-- Đánh dấu "đúng giờ" / "về sớm" thủ công
-- Tạo bản ghi chấm công cho nhân viên
-- Xem và xóa bản ghi
-- Cấu hình giờ AM/PM deadline
+- **Lọc theo khoảng ngày:** hai ô *Từ* / *Đến* lọc bản ghi trong khoảng đó.
+  Bỏ trống cả hai thì xem toàn bộ. Bên cạnh vẫn có ô tìm theo mã NV / tên.
+- **Tạo bản ghi mới** (nút *➕ Tạo bản ghi*): dùng khi nhân viên quên chấm công nên
+  ngày đó **không có bản ghi nào**. Chọn nhân viên + ngày + giờ checkin/checkout.
+  - Chỉ tạo được cho **ngày đã qua hoặc hôm nay**.
+  - Phải nhập ít nhất một giờ; muốn ngày đó được tính công thì nhập **đủ cả hai**
+    (xem [8.2](#82-điều-kiện-tiên-quyết-phải-đủ-checkin-và-checkout)).
+  - Nếu ngày đó đã có bản ghi, hệ thống báo trùng — hãy sửa giờ trực tiếp trên bảng.
+- **Sửa giờ trực tiếp** trên từng dòng: nhập `HH:MM` hoặc bấm `✕` để xoá một giờ.
+  Xoá cả hai giờ thì bản ghi bị xoá hoàn toàn.
+- Mọi thay đổi đều được ghi vào `audit_log` với `actor = hidden`.
 
 ---
 
@@ -415,35 +432,52 @@ Dùng để chỉnh sửa thủ công các bản ghi chấm công:
 - **Kết thúc:** Ngày 25 tháng hiện tại
 - **Ví dụ:** Kỳ 08/2026 = 26/07/2026 → 25/08/2026
 
-### 8.2. Quy tắc tính công (Thứ 2 - Thứ 6) — **phiên bản mới 2026-09**
+### 8.2. Điều kiện tiên quyết: phải đủ checkin VÀ checkout
 
-> Tính công on-the-fly từ bảng `time_log`. **Checkout không bắt buộc** — chỉ cần checkin là có công. Nếu quên checkout thì ô checkout hiển thị `No` nhưng vẫn tính 1 công cho ngày đó (theo rule AM/PM).
+> **Quy tắc quan trọng:** Một ngày chỉ được tính công khi nhân viên có **ĐỦ CẢ HAI**
+> giờ: checkin **và** checkout. Thiếu bất kỳ giờ nào trong 2 giờ thì ngày đó tính **0 công**
+> (`status = no_checkout`), kể cả thứ Bảy.
+>
+> Trên bảng công, ô checkout của ngày đó hiển thị `No` để dễ nhận biết nguyên nhân.
+> Muốn sửa lại thì vào trang `/hidden` → nhập giờ checkout (hoặc tạo bản ghi mới nếu
+> ngày đó chưa có bản ghi nào).
+
+Áp dụng cho **T2 – T7**. Chủ nhật không tính công nên không áp dụng.
+
+### 8.3. Quy tắc tính công (Thứ 2 - Thứ 6) — sau khi đã đủ 2 giờ
+
+Tính công on-the-fly từ bảng `time_log`.
 
 | Checkin | Checkout | Công | Ghi chú |
 |---|---|---|---|
-| Không checkin | — | **0** | Nghỉ |
+| Không checkin | — | **0** | Nghỉ (`absent`) |
+| Có checkin | Không checkout | **0** | `no_checkout` — thiếu giờ ra |
 | `> 12:00` | `< 13:30` | **0** | PM lỗi (chỉ làm 30 phút) |
 | `<= 12:00` | `< 13:30` | **0.5** | Buổi sáng |
-| `> 12:00` | bất kỳ / không checkout | **0.5** | Buổi chiều |
+| `> 12:00` | `>= 13:30` | **0.5** | Buổi chiều |
 | `<= 12:00` | `>= 13:30` | **1** | Full day |
 
-### 8.3. Quy tắc tính công (Thứ 7)
+Ngoài ra, giờ "lỗi" ghi đè kết quả trên (xem [8.7](#87-highlight-màu-trên-bảng-công-checkincheckout)):
+checkin `> 18:00` hoặc checkout `< 08:30` → **0 công**.
+
+### 8.4. Quy tắc tính công (Thứ 7) — sau khi đã đủ 2 giờ
 
 | Checkin | Checkout | Công |
 |---|---|---|
-| Có checkin | Bất kỳ | **0.5** |
-| Không checkin | — | 0 (không tính) |
+| Có checkin | Không checkout | **0** — thiếu giờ ra |
+| Có checkin | Có checkout | **0.5** |
+| Không checkin | — | **0** (không tính) |
 
-### 8.4. Thứ Chủ Nhật
+### 8.5. Thứ Chủ Nhật
 
 - Không tính công, bỏ qua trong bảng công
 
-### 8.5. Đi muộn & Về sớm
+### 8.6. Đi muộn & Về sớm
 
 **Đi muộn AM:** `max(0, checkin - AM_deadline)` phút
 **Về sớm:** `max(0, PM_deadline - checkout)` phút
 
-### 8.6. Highlight màu trên bảng công (checkin/checkout)
+### 8.7. Highlight màu trên bảng công (checkin/checkout)
 
 Mỗi ô checkin/checkout được tô màu theo rule (dùng để dễ phát hiện sai sót):
 
@@ -460,7 +494,7 @@ Mỗi ô checkin/checkout được tô màu theo rule (dùng để dễ phát hi
 
 ---
 
-## 8.7. Bảng `time_log` (mới)
+## 8.8. Bảng `time_log`
 
 Mỗi lượt checkin/checkout tạo **1 row** trong bảng `time_log` (source of truth). Bảng `attendance` chỉ là summary view được tính lại (MIN/MAX) mỗi khi có action.
 
@@ -478,7 +512,7 @@ Cấu trúc `time_log`:
 
 UNIQUE constraint: `(employee_id, date, action)` — mỗi NV mỗi ngày chỉ có 1 row checkin + 1 row checkout. Admin sửa qua endpoint `/api/hidden/timelog/update` sẽ ghi đè.
 
-## 8.8. Bảng `holidays` (nghỉ lễ / nghỉ phép)
+## 8.9. Bảng `holidays` (nghỉ lễ / nghỉ phép)
 
 Admin thêm ngày lễ (L) hoặc nghỉ phép (P) từ `/admin` → panel "📅 Ngày lễ/Phép":
 
@@ -723,9 +757,10 @@ docker compose up -d
 
 ### 13.3. Trang Hidden (`/hidden`)
 
-- Yêu cầu đăng nhập với role `edit_attendance`
-- Có thể giới hạn theo IP (cấu hình trong `hidden.py`)
-- Mặc định: `ALLOW_ANY_IP = True` (chỉ cần đăng nhập)
+- Toàn bộ `/api/hidden/*` trả `404` nếu chưa đặt `HIDDEN_PASSWORD`
+- Đăng nhập bằng mật khẩu dùng chung → token hạn 12h, gửi qua header `X-Hidden-Token`
+- Rate limit đăng nhập: 5 lần / 60 giây / IP
+- Mọi thao tác sửa / tạo / xoá bản ghi đều ghi vào `audit_log` (`actor = hidden`)
 
 ### 13.4. Production Checklist
 

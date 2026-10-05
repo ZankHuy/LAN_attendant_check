@@ -11,9 +11,17 @@ Auth model:
      refuses to start responding (server still boots but returns 404).
 
 Public surface (post-refactor):
-  GET    /api/hidden/attendance            — list ALL attendance rows,
-                                              sorted by employee.id ASC,
-                                              then date ASC.
+  GET    /api/hidden/attendance            — list attendance rows, sorted by
+                                              employee.id ASC, then date ASC.
+                                              Optional `?from=&to=` inclusive
+                                              date bounds (max span 366 days).
+  POST   /api/hidden/attendance            — create a brand-new attendance
+                                              record for an (employee, date)
+                                              that has no record yet (for
+                                              fixing days the employee forgot
+                                              to check in/out at all). Only
+                                              past/today dates; rejects
+                                              duplicates with 409.
   PATCH  /api/hidden/attendance/{id}/times — set checkin/checkout times for
                                               a row. Either field may be null
                                               (= "no time that day"); if both
@@ -23,6 +31,9 @@ Public surface (post-refactor):
 
 The timelog GET endpoint is kept for debugging; timelog POST is gone because
 the new /times endpoint handles both insert and clear through one path.
+
+Attendance rule enforced by crud.compute_work_day: a day only earns work
+value when BOTH checkin and checkout exist. Missing either one => 0 công.
 """
 import hmac
 import logging
@@ -32,7 +43,7 @@ import time
 from datetime import date, datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, status, Header, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Query, Request, Response
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
@@ -182,30 +193,91 @@ class AttendanceTimesUpdate(BaseModel):
         return v
 
 
+class AttendanceCreate(BaseModel):
+    """Body for POST /api/hidden/attendance (tạo bản ghi mới).
+
+    Dùng khi nhân viên quên chấm công (không có bản ghi nào cho ngày đó)
+    nhưng thực tế đã có đủ checkin + checkout — cho phép bổ sung lại.
+
+    - `employee_id`: phải tồn tại.
+    - `date`: bắt buộc là ngày ĐÃ QUA (không cho phép ngày tương lai).
+    - `checkin` / `checkout`: "HH:MM" hoặc null. Được phép chỉ nhập một
+      trong hai, nhưng không được để trống CẢ HAI (bản ghi rỗng vô nghĩa).
+      Lưu ý: theo quy tắc tính công hiện tại, ngày thiếu một trong hai giờ
+      sẽ ra 0 công — nên nhập đủ cả hai nếu muốn ngày đó được tính công.
+    """
+    employee_id: int
+    date: date
+    checkin: Optional[str] = None
+    checkout: Optional[str] = None
+
+    @field_validator("checkin", "checkout", mode="before")
+    @classmethod
+    def _empty_to_none(cls, v):
+        if v == "" or v is None:
+            return None
+        return v
+
+
 # ── Attendance router (mounted at /api/hidden) ────────────────────────────
 
 att_router = APIRouter(prefix="/attendance", tags=["hidden"])
+
+# Cap on how wide a single date-range filter may be, so a careless request
+# (e.g. from=1900-01-01) can't pull the whole table into memory.
+MAX_RANGE_DAYS = 366
 
 
 @att_router.get("", response_model=List[AttendanceFlagRow])
 def list_attendance(
     response: Response,
+    date_from: Optional[date] = Query(
+        default=None, alias="from",
+        description="Chỉ lấy bản ghi từ ngày này trở đi (YYYY-MM-DD)",
+    ),
+    date_to: Optional[date] = Query(
+        default=None, alias="to",
+        description="Chỉ lấy bản ghi tới ngày này (YYYY-MM-DD)",
+    ),
     db: Session = Depends(get_db),
     token: str = Depends(require_hidden_token),
 ):
-    """Return ALL attendance rows for the /hidden page.
+    """Return attendance rows for the /hidden page, optionally date-filtered.
+
+    Query params:
+      - `from` / `to`: optional inclusive date bounds. Either, both, or
+        neither may be supplied. `from > to` is a 422, and the range may not
+        span more than MAX_RANGE_DAYS days.
 
     Sort: by employee.id ascending, then date ascending.
     Safety: hard-capped at 5000 rows so a runaway DB can't OOM the worker.
     """
+    if date_from and date_to:
+        if date_from > date_to:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Ngày bắt đầu ({date_from}) không được sau ngày kết thúc ({date_to}).",
+            )
+        if (date_to - date_from).days > MAX_RANGE_DAYS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Khoảng lọc tối đa {MAX_RANGE_DAYS} ngày "
+                    f"(nhận {((date_to - date_from).days) + 1} ngày). "
+                    "Hãy chia nhỏ khoảng thời gian."
+                ),
+            )
+
     HARD_LIMIT = 5000
-    rows = (
-        db.query(Attendance)
-        .join(crud.Employee, crud.Employee.id == Attendance.employee_id)
-        .order_by(asc(crud.Employee.id), asc(Attendance.date))
-        .limit(HARD_LIMIT)
-        .all()
+    q = db.query(Attendance).join(
+        crud.Employee, crud.Employee.id == Attendance.employee_id
     )
+    if date_from is not None:
+        q = q.filter(Attendance.date >= date_from)
+    if date_to is not None:
+        q = q.filter(Attendance.date <= date_to)
+    rows = q.order_by(asc(crud.Employee.id), asc(Attendance.date)).limit(HARD_LIMIT).all()
+
     response.headers["X-Total-Count"] = str(len(rows))
     response.headers["X-Hard-Limit"] = str(HARD_LIMIT)
 
@@ -312,6 +384,139 @@ def _set_one_time(
     return row
 
 
+def _build_flag_row(att: Attendance, emp: Optional[crud.Employee]) -> AttendanceFlagRow:
+    """Build the API response shape for one attendance row.
+
+    Shared by PATCH (edit existing) and POST (create new) so both endpoints
+    return an identical payload the frontend can render the same way.
+    """
+    return AttendanceFlagRow(
+        id=att.id,
+        employee_id=att.employee_id,
+        employee_code=emp.code if emp else "",
+        employee_name=emp.name if emp else None,
+        date=att.date,
+        checkin_time=att.checkin_time,
+        checkout_time=att.checkout_time,
+    )
+
+
+@att_router.post("", response_model=AttendanceFlagRow, status_code=status.HTTP_201_CREATED)
+def create_attendance(
+    payload: AttendanceCreate,
+    db: Session = Depends(get_db),
+    token: str = Depends(require_hidden_token),
+):
+    """Create a brand-new attendance record for a (employee, date) with no record yet.
+
+    Use case: nhân viên quên chấm công nên hệ thống không có bản ghi nào cho
+    ngày đó, nhưng thực tế họ đã làm việc đủ buổi. Người quản lý tạo bản ghi
+    thủ công ở đây để ngày đó được tính công.
+
+    Rules enforced:
+      - Chỉ tạo cho ngày ĐÃ QUA (date <= hôm nay), trả 422 nếu ngày tương lai.
+      - employee_id phải tồn tại, trả 404 nếu không.
+      - Phải có ít nhất MỘT trong hai giờ, trả 422 nếu cả hai đều trống
+        (bản ghi rỗng sẽ bị xoá ngay lập tức, nên coi như lỗi đầu vào).
+      - Nếu đã tồn tại bản ghi cho (employee, date) thì trả 409 và hướng dẫn
+        dùng PATCH /{id}/times để sửa, tránh tạo trùng.
+    """
+    from app.log_timelog import _upsert_attendance  # local import to avoid cycle
+
+    # 1. Ngày tương lai không được phép tạo.
+    if payload.date > date.today():
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Không thể tạo bản ghi cho ngày tương lai ({payload.date}). "
+                "Chỉ tạo được cho ngày đã qua hoặc hôm nay."
+            ),
+        )
+
+    # 2. Nhân viên phải tồn tại.
+    emp = db.query(crud.Employee).filter(crud.Employee.id == payload.employee_id).first()
+    if not emp:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Không tìm thấy nhân viên id={payload.employee_id}",
+        )
+
+    # 3. Phải có ít nhất một giờ, nếu không bản ghi sẽ rỗng vô nghĩa.
+    if payload.checkin is None and payload.checkout is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Phải nhập ít nhất một trong hai giờ (checkin hoặc checkout). "
+                "Lưu ý: ngày thiếu một trong hai giờ sẽ không được tính công — "
+                "nếu nhân viên đã làm đủ buổi thì nhập cả hai giờ."
+            ),
+        )
+
+    # 4. Chặn trùng (employee, date) — dùng PATCH để sửa bản ghi đã có.
+    existing_att = (
+        db.query(Attendance)
+        .filter(
+            Attendance.employee_id == payload.employee_id,
+            Attendance.date == payload.date,
+        )
+        .first()
+    )
+    if existing_att is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Nhân viên này đã có bản ghi chấm công ngày {payload.date} "
+                f"(id={existing_att.id}). Hãy sửa giờ trực tiếp trên bảng "
+                f"thay vì tạo mới."
+            ),
+        )
+
+    # 5. Ghi time_log (nguồn sự thật) cho từng phía được cung cấp.
+    _set_one_time(db, payload.employee_id, payload.date, "checkin", payload.checkin)
+    _set_one_time(db, payload.employee_id, payload.date, "checkout", payload.checkout)
+
+    # 6. Đồng bộ bản ghi attendance (tạo mới vì chưa có row nào cho ngày này).
+    db.flush()
+    _upsert_attendance(db, payload.employee_id, payload.date)
+    db.flush()
+
+    att = (
+        db.query(Attendance)
+        .filter(
+            Attendance.employee_id == payload.employee_id,
+            Attendance.date == payload.date,
+        )
+        .first()
+    )
+    if att is None:
+        # Không xảy ra với đường hỗ trợ này (đã chặn empty ở bước 3), nhưng
+        # để phòng vệ khỏi trả về 500 với lỗi DB khó hiểu.
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Không tạo được bản ghi chấm công. Vui lòng thử lại.",
+        )
+
+    db.commit()
+    db.refresh(att)
+
+    log_action(
+        db, actor="hidden", action="create_attendance",
+        entity_type="attendance", entity_id=att.id,
+        detail={
+            "employee_id": payload.employee_id,
+            "employee_code": emp.code,
+            "date": str(payload.date),
+            "after": {
+                "checkin": str(att.checkin_time),
+                "checkout": str(att.checkout_time),
+            },
+        },
+    )
+
+    return _build_flag_row(att, emp)
+
+
 @att_router.patch("/{attendance_id}/times", response_model=AttendanceFlagRow)
 def set_attendance_times(
     attendance_id: int,
@@ -380,16 +585,12 @@ def set_attendance_times(
     )
 
     emp = db.query(crud.Employee).filter(crud.Employee.id == att.employee_id).first()
-    return AttendanceFlagRow(
-        id=att.id, employee_id=att.employee_id,
-        employee_code=emp.code if emp else "",
-        employee_name=emp.name if emp else None,
-        date=att.date, checkin_time=att.checkin_time, checkout_time=att.checkout_time,
-    )
+    return _build_flag_row(att, emp)
 
 
 # Mount the attendance router under /api/hidden.
 # Endpoints become:
-#   GET   /api/hidden/attendance
+#   GET   /api/hidden/attendance[?from=&to=]
+#   POST  /api/hidden/attendance
 #   PATCH /api/hidden/attendance/{id}/times
 router.include_router(att_router)

@@ -287,10 +287,15 @@ try:
     ws = wb[expected_sheet]
     assert_true(ws.max_row > 0, f"sheet has rows (max_row={ws.max_row})")
     assert_true(ws.max_column >= 37, f"sheet has >= 37 columns (got {ws.max_column})")
-    # Spot-check: title in A1
+    # Spot-check: the template's A1 title carried through into the export.
+    # The baseline template shipped in resorce/template.xlsx uses a generic
+    # "CÔNG TY MẪU" placeholder (each company replaces the template file).
     a1 = ws["A1"].value
     print(f"    A1 value: {a1!r}")
-    assert_true("LAN ATTENDANT" in (a1 or ""), "A1 has company title")
+    assert_true(bool(a1 and str(a1).strip()), "A1 has a company title")
+    # C1/C2 hold month/year and drive the DATE() formulas in row 9.
+    assert_true(ws["C1"].value is not None, "C1 has month")
+    assert_true(ws["C2"].value is not None, "C2 has year")
 except Exception as e:
     assert_true(False, f"xlsx parse failed: {e}")
 
@@ -377,6 +382,57 @@ for i in range(6):
     rate_status, _, _ = http("POST", "/api/hidden/login",
                              json_body={"password": "x"})
 assert_eq(rate_status, 429, f"6th login attempt returns 429 (rate limited)")
+
+# ── 18. Hidden: date filter + create new record ────────────────────
+# (The detailed attendance-rule coverage lives in scripts/test_require_both.py;
+#  these are the API-shape smoke checks so run_tests.py covers both features.)
+section("18. Hidden: date filter (from/to) + POST create")
+
+status, response, headers = http("GET", "/api/hidden/attendance",
+                                 headers={"X-Hidden-Token": TOKEN})
+assert_eq(status, 200, "GET attendance unfiltered returns 200")
+
+status, response, _ = http("GET", "/api/hidden/attendance?from=2026-01-01&to=2026-01-02",
+                           headers={"X-Hidden-Token": TOKEN})
+assert_eq(status, 200, "GET attendance with from/to returns 200")
+assert_true(isinstance(response, list) and
+            all("2026-01-01" <= r["date"] <= "2026-01-02" for r in response),
+            "date filter returns only rows inside the window")
+
+status, response, _ = http("GET", "/api/hidden/attendance?from=2026-12-31&to=2026-01-01",
+                           headers={"X-Hidden-Token": TOKEN})
+assert_eq(status, 422, "from > to returns 422")
+
+# Create a record for a day with no attendance, then confirm it appears.
+if NV001_ID:
+    past = (date.today() - timedelta(days=4)).isoformat()
+    status, response, _ = http("POST", "/api/hidden/attendance",
+                               headers={"X-Hidden-Token": TOKEN},
+                               json_body={"employee_id": NV001_ID, "date": past,
+                                          "checkin": "08:00", "checkout": "17:30"})
+    assert_true(status in (200, 201), f"POST create new record returns {status}")
+
+    status, response, _ = http("POST", "/api/hidden/attendance",
+                               headers={"X-Hidden-Token": TOKEN},
+                               json_body={"employee_id": NV001_ID, "date": past,
+                                          "checkin": "09:00", "checkout": "18:00"})
+    assert_eq(status, 409, "duplicate (employee, date) returns 409")
+
+    # Validation guards
+    status, response, _ = http("POST", "/api/hidden/attendance",
+                               headers={"X-Hidden-Token": TOKEN},
+                               json_body={"employee_id": NV001_ID, "date": past,
+                                          "checkin": None, "checkout": None})
+    assert_eq(status, 422, "create with both times blank returns 422")
+
+    future = (date.today() + timedelta(days=3)).isoformat()
+    status, response, _ = http("POST", "/api/hidden/attendance",
+                               headers={"X-Hidden-Token": TOKEN},
+                               json_body={"employee_id": NV001_ID, "date": future,
+                                          "checkin": "08:00", "checkout": "17:30"})
+    assert_eq(status, 422, "create for a future date returns 422")
+else:
+    print("  [SKIP] NV001 not created, cannot test POST create")
 
 # ── Section summary ───────────────────────────────────────────────
 section("summary")

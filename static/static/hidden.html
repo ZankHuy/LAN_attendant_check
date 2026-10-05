@@ -27,13 +27,37 @@
 
         /* ── Main ── */
         #main { display: none; max-width: 1100px; margin: 0 auto; }
-        .topbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+        .topbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px;
+                  flex-wrap: wrap; }
         .topbar input[type="text"] { padding: 7px 10px; border: 1px solid #d1d5db;
                                      border-radius: 6px; font-size: 14px; flex: 1; max-width: 280px; }
+        .topbar input[type="date"] { padding: 7px 10px; border: 1px solid #d1d5db;
+                                     border-radius: 6px; font-size: 14px; }
         .topbar button { padding: 7px 12px; border: 1px solid #d1d5db; background: white;
                          border-radius: 6px; font-size: 13px; cursor: pointer; }
         .topbar button.primary { background: #3b82f6; color: white; border-color: #3b82f6; }
         .topbar .logout { margin-left: auto; }
+        .date-range { display: flex; align-items: center; gap: 6px; color: #666; font-size: 13px; }
+
+        /* ── Create form ── */
+        #createForm { display: none; background: white; padding: 14px 16px; margin-bottom: 12px;
+                      border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.06);
+                      border: 1px solid #e5e7eb; }
+        #createForm.open { display: block; }
+        #createForm .form-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+        #createForm label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 4px;
+                            font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+        #createForm select, #createForm input { padding: 7px 9px; border: 1px solid #d1d5db;
+                                                border-radius: 6px; font-size: 14px; }
+        #createForm select { min-width: 220px; }
+        #createForm button.save { padding: 8px 16px; background: #10b981; color: white;
+                                  border: none; border-radius: 6px; font-size: 13px;
+                                  cursor: pointer; }
+        #createForm button.save:hover { background: #059669; }
+        #createForm button.save:disabled { background: #d1d5db; cursor: not-allowed; }
+        #createForm .hint { font-size: 12px; color: #9ca3af; margin-top: 8px; }
+
+        .list-summary { margin: 0 0 8px; font-size: 13px; color: #6b7280; }
 
         /* ── Table ── */
         table { width: 100%; border-collapse: collapse; background: white;
@@ -84,9 +108,52 @@
         <div class="topbar">
             <input type="text" id="filter" placeholder="🔍 Lọc theo mã NV hoặc tên..."
                    oninput="applyFilter()">
+            <span class="date-range">
+                <label for="dateFrom" style="font-size:13px;">Từ</label>
+                <input type="date" id="dateFrom">
+                <label for="dateTo" style="font-size:13px;">Đến</label>
+                <input type="date" id="dateTo">
+            </span>
+            <button class="primary" onclick="loadList()">🔍 Lọc</button>
+            <button onclick="clearDateFilter()">Xoá lọc</button>
+            <button onclick="toggleCreateForm()">➕ Tạo bản ghi</button>
             <button onclick="loadList()">↻ Tải lại</button>
             <button class="logout" onclick="logout()">Đăng xuất</button>
         </div>
+
+        <!-- Create new attendance record -->
+        <div id="createForm">
+            <div class="form-row">
+                <div>
+                    <label for="newEmployee">Nhân viên</label>
+                    <select id="newEmployee">
+                        <option value="">— Đang tải danh sách... —</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="newDate">Ngày</label>
+                    <input type="date" id="newDate">
+                </div>
+                <div>
+                    <label for="newCheckin">Checkin</label>
+                    <input type="time" id="newCheckin" value="08:00">
+                </div>
+                <div>
+                    <label for="newCheckout">Checkout</label>
+                    <input type="time" id="newCheckout" value="17:30">
+                </div>
+                <div>
+                    <button class="save" id="createSaveBtn" onclick="submitCreate()">💾 Tạo bản ghi</button>
+                </div>
+            </div>
+            <div class="hint">
+                Dùng khi nhân viên quên chấm công nên không có bản ghi cho ngày đó.
+                Chỉ tạo được cho <b>ngày đã qua hoặc hôm nay</b>, và phải nhập ít nhất một giờ.
+                Lưu ý ngày thiếu checkin hoặc checkout sẽ <b>không được tính công</b> — hãy nhập đủ cả hai.
+            </div>
+        </div>
+
+        <p class="list-summary" id="listSummary"></p>
 
         <table>
             <thead>
@@ -110,10 +177,12 @@
     <script>
     const API_LIST = '/api/hidden/attendance';
     const API_LOGIN = '/api/hidden/login';
+    const API_EMPLOYEES = '/api/employees';
     const TOKEN_KEY = 'hidden_token';
     const TOKEN_EXP_KEY = 'hidden_token_exp';
     let rows = [];   // last fetched list
     let filter = '';
+    let employeesLoaded = false;
 
     // ── Auth ────────────────────────────────────────────────────────────────
     function getToken() { return sessionStorage.getItem(TOKEN_KEY) || ''; }
@@ -196,12 +265,35 @@
     }
 
     // ── Load list ───────────────────────────────────────────────────────────
+    // Build the query string from the two date inputs. Blank inputs are simply
+    // omitted so the server keeps returning everything.
+    function listUrl() {
+        const from = document.getElementById('dateFrom').value;
+        const to = document.getElementById('dateTo').value;
+        const p = new URLSearchParams();
+        if (from) p.set('from', from);
+        if (to) p.set('to', to);
+        const qs = p.toString();
+        return qs ? `${API_LIST}?${qs}` : API_LIST;
+    }
+
+    function updateListSummary(shown) {
+        const el = document.getElementById('listSummary');
+        const from = document.getElementById('dateFrom').value;
+        const to = document.getElementById('dateTo').value;
+        let scope = 'Toàn bộ thời gian';
+        if (from && to) scope = `Từ ${from} đến ${to}`;
+        else if (from) scope = `Từ ${from} trở đi`;
+        else if (to) scope = `Đến ${to}`;
+        el.textContent = `${scope} — ${shown} bản ghi`;
+    }
+
     async function loadList() {
         const tbody = document.getElementById('tbody');
         const empty = document.getElementById('empty');
         tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:20px; color:#9ca3af;">Đang tải...</td></tr>';
         try {
-            const r = await fetch(API_LIST, { headers: authHeaders() });
+            const r = await fetch(listUrl(), { headers: authHeaders() });
             if (r.status === 401) { clearToken(); return; }
             if (!r.ok) {
                 const d = await r.json().catch(() => ({}));
@@ -216,21 +308,34 @@
         }
     }
 
+    function clearDateFilter() {
+        document.getElementById('dateFrom').value = '';
+        document.getElementById('dateTo').value = '';
+        loadList();
+    }
+
     // ── Render ──────────────────────────────────────────────────────────────
+    // Client-side text filter (mã NV / tên). Date filtering already happened
+    // server-side, so this only narrows what is already loaded.
+    function matchesFilter(r) {
+        const f = filter.trim().toLowerCase();
+        if (!f) return true;
+        return (r.employee_code || '').toLowerCase().includes(f) ||
+               (r.employee_name || '').toLowerCase().includes(f);
+    }
+
     function renderRows() {
         const tbody = document.getElementById('tbody');
         const empty = document.getElementById('empty');
-        const f = filter.trim().toLowerCase();
-        const view = !f ? rows : rows.filter(r =>
-            (r.employee_code || '').toLowerCase().includes(f) ||
-            (r.employee_name || '').toLowerCase().includes(f)
-        );
+        const view = rows.filter(matchesFilter);
         if (!view.length) {
             tbody.innerHTML = '';
             empty.style.display = 'block';
+            updateListSummary(0);
             return;
         }
         empty.style.display = 'none';
+        updateListSummary(view.length);
 
         tbody.innerHTML = view.map((r, i) => {
             const ci = r.checkin_time ? toHHMM(r.checkin_time) : '';
@@ -293,6 +398,7 @@
                         rows = rows.filter(x => x.id !== updated.id);
                         tr.classList.add('row-saved');
                         setTimeout(() => tr.remove(), 600);
+                        updateListSummary(rows.filter(matchesFilter).length);
                         toast('Đã xóa bản ghi (cả 2 giờ trống)', 'ok');
                         return;
                     }
@@ -315,6 +421,106 @@
     function applyFilter() {
         filter = document.getElementById('filter').value;
         renderRows();
+    }
+
+    // ── Create new attendance record ────────────────────────────────────────
+    function todayISO() {
+        const d = new Date();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${d.getFullYear()}-${m}-${day}`;
+    }
+
+    function toggleCreateForm() {
+        const form = document.getElementById('createForm');
+        const opening = !form.classList.contains('open');
+        form.classList.toggle('open', opening);
+        if (opening) {
+            const dateInput = document.getElementById('newDate');
+            // Server chỉ cho tạo bản ghi cho ngày đã qua / hôm nay, nên chặn
+            // ngay ở UI để người dùng không chọn được ngày tương lai.
+            dateInput.max = todayISO();
+            if (!dateInput.value) dateInput.value = todayISO();
+            loadEmployees();
+        }
+    }
+
+    async function loadEmployees() {
+        if (employeesLoaded) return;
+        const sel = document.getElementById('newEmployee');
+        try {
+            const r = await fetch(API_EMPLOYEES);
+            if (!r.ok) throw new Error('load failed');
+            const emps = await r.json();
+            sel.innerHTML = '<option value="">— Chọn nhân viên —</option>' + emps.map(e =>
+                `<option value="${e.id}">${escapeHtml(e.code)} — ${escapeHtml(e.name)}</option>`
+            ).join('');
+            employeesLoaded = true;
+        } catch (e) {
+            sel.innerHTML = '<option value="">— Không tải được danh sách NV —</option>';
+            toast('Không tải được danh sách nhân viên', 'err');
+        }
+    }
+
+    async function submitCreate() {
+        const btn = document.getElementById('createSaveBtn');
+        const empId = document.getElementById('newEmployee').value;
+        const dateVal = document.getElementById('newDate').value;
+        const checkin = document.getElementById('newCheckin').value || null;
+        const checkout = document.getElementById('newCheckout').value || null;
+
+        if (!empId) { toast('Vui lòng chọn nhân viên', 'err'); return; }
+        if (!dateVal) { toast('Vui lòng chọn ngày', 'err'); return; }
+        if (!checkin && !checkout) {
+            toast('Phải nhập ít nhất checkin hoặc checkout', 'err');
+            return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = '⏳ Đang tạo...';
+        try {
+            const r = await fetch(API_LIST, {
+                method: 'POST',
+                headers: authHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({
+                    employee_id: parseInt(empId, 10),
+                    date: dateVal,
+                    checkin, checkout,
+                }),
+            });
+            if (!r.ok) {
+                const d = await r.json().catch(() => ({}));
+                toast(d.detail || `Lỗi ${r.status}`, 'err');
+                return;
+            }
+            const created = await r.json();
+            // Đưa row mới vào danh sách cục bộ rồi render lại. Nếu đang lọc
+            // theo khoảng ngày mà ngày vừa tạo nằm ngoài khoảng thì row sẽ
+            // không hiện — nên reload cho chắc ăn thay vì tự chèn.
+            if (isWithinFilter(created.date)) {
+                rows.push(created);
+                renderRows();
+            } else {
+                await loadList();
+            }
+            // Reset phần giờ cho lần tạo tiếp theo.
+            document.getElementById('newCheckin').value = '08:00';
+            document.getElementById('newCheckout').value = '17:30';
+            toast('Đã tạo bản ghi', 'ok');
+        } catch (e) {
+            toast('Lỗi kết nối', 'err');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '💾 Tạo bản ghi';
+        }
+    }
+
+    function isWithinFilter(dateStr) {
+        const from = document.getElementById('dateFrom').value;
+        const to = document.getElementById('dateTo').value;
+        if (from && dateStr < from) return false;
+        if (to && dateStr > to) return false;
+        return true;
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
